@@ -291,7 +291,7 @@ def consultar_nfe_simples(cnpj, mes=None, ano=None, certificado_path=None, certi
     """
     # Usar configurações padrão se não fornecidas
     if not certificado_path:
-        certificado_path = r"C:\Users\bruno.sousa\Documents\API-Pr-saude\certificado.pfx"
+        certificado_path = r"C:\Users\bruno.sousa\Documents\API-Pr-saude\API-Pro.saude"
     
     if not certificado_senha:
         # Tentar carregar da variável de ambiente ou arquivo
