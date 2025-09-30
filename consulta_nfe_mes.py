@@ -302,7 +302,7 @@ def consultar_nfe_simples(cnpj, mes=None, ano=None, certificado_path=None, certi
                 with open(senha_file, "r", encoding="utf-8") as f:
                     certificado_senha = f.read().strip()
             else:
-                certificado_senha = "Abcd1234"  # Fallback
+                certificado_senha = "Abcd1234"  
     
     # Criar instância e consultar
     consulta = SefazConsulta(certificado_path, certificado_senha)
