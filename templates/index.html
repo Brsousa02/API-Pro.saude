@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Consulta NF-e - SEFAZ</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+        input, select, button {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            font-size: 16px;
+        }
+        button {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            cursor: pointer;
+            margin-top: 10px;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        .loading {
+            display: none;
+            text-align: center;
+            color: #007bff;
+        }
+        .results {
+            margin-top: 30px;
+            display: none;
+        }
+        .nfe-item {
+            border: 1px solid #ddd;
+            padding: 15px;
+            margin-bottom: 10px;
+            border-radius: 5px;
+            background-color: #f9f9f9;
+        }
+        .download-btn {
+            background-color: #28a745;
+            padding: 5px 10px;
+            font-size: 14px;
+            margin-top: 10px;
+        }
+        .download-btn:hover {
+            background-color: #1e7e34;
+        }
+        .error {
+            color: #dc3545;
+            background-color: #f8d7da;
+            padding: 10px;
+            border-radius: 5px;
+            margin-top: 10px;
+        }
+        .success {
+            color: #155724;
+            background-color: #d4edda;
+            padding: 10px;
+            border-radius: 5px;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🧾 Sistema de Consulta NF-e</h1>
+        
+        <form id="consultaForm">
+            <div class="form-group">
+                <label for="cnpj">CNPJ/CPF:</label>
+                <input type="text" id="cnpj" name="cnpj" placeholder="Digite o CNPJ ou CPF" required>
+            </div>
+            
+            <div class="form-group">
+                <label for="mes">Mês:</label>
+                <select id="mes" name="mes">
+                    <option value="">Todos os meses</option>
+                    <option value="1">Janeiro</option>
+                    <option value="2">Fevereiro</option>
+                    <option value="3">Março</option>
+                    <option value="4">Abril</option>
+                    <option value="5">Maio</option>
+                    <option value="6">Junho</option>
+                    <option value="7">Julho</option>
+                    <option value="8">Agosto</option>
+                    <option value="9">Setembro</option>
+                    <option value="10">Outubro</option>
+                    <option value="11">Novembro</option>
+                    <option value="12">Dezembro</option>
+                </select>
+            </div>
+            
+            <div class="form-group">
+                <label for="ano">Ano:</label>
+                <select id="ano" name="ano">
+                    <option value="">Todos os anos</option>
+                    <option value="2025">2025</option>
+                    <option value="2024">2024</option>
+                    <option value="2023">2023</option>
+                    <option value="2022">2022</option>
+                    <option value="2021">2021</option>
+                    <option value="2020">2020</option>
+                </select>
+            </div>
+            
+            <button type="submit">🔍 Consultar NF-e</button>
+        </form>
+        
+        <div class="loading" id="loading">
+            <p>⏳ Consultando SEFAZ... Aguarde...</p>
+        </div>
+        
+        <div id="message"></div>
+        
+        <div class="results" id="results">
+            <h2>📋 Resultados da Consulta</h2>
+            <div id="nfeList"></div>
+            <button type="button" id="downloadAll" class="download-btn">📦 Baixar Todas as NF-e (ZIP)</button>
+        </div>
+    </div>
+
+    <script>
+document.getElementById('consultaForm').addEventListener('submit', function(e) {
+    e.preventDefault();
+    
+    // Pegar dados do formulário
+    const cnpj = document.getElementById('cnpj').value;
+    const mes = document.getElementById('mes').value;
+    const ano = document.getElementById('ano').value;
+    
+    // Validação básica
+    if (!cnpj.trim()) {
+        showMessage('Por favor, digite um CNPJ/CPF válido.', 'error');
+        return;
+    }
+    
+    // Mostrar loading
+    document.getElementById('loading').style.display = 'block';
+    document.getElementById('results').style.display = 'none';
+    document.getElementById('message').innerHTML = '';
+    
+    // Fazer requisição para a API
+    fetch('/api/consultar', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+            cnpj: cnpj,
+            mes: mes || null,
+            ano: ano || null
+        })
+    })
+    .then(response => response.json())
+    .then(data => {
+        document.getElementById('loading').style.display = 'none';
+        
+        if (data.sucesso) {
+            if (data.nfe_encontradas && data.nfe_encontradas.length > 0) {
+                showResults(data.nfe_encontradas);
+                showMessage(`✅ Consulta realizada com sucesso! ${data.nfe_encontradas.length} NF-e encontrada(s).`, 'success');
+            } else {
+                showMessage('ℹ️ Nenhuma NF-e encontrada para os critérios informados.', 'error');
+            }
+        } else {
+            showMessage(`❌ Erro na consulta: ${data.erro}`, 'error');
+        }
+    })
+    .catch(error => {
+        document.getElementById('loading').style.display = 'none';
+        showMessage(`❌ Erro de conexão: ${error.message}`, 'error');
+    });
+});
+
+function showMessage(message, type) {
+    const messageDiv = document.getElementById('message');
+    messageDiv.innerHTML = `<div class="${type}">${message}</div>`;
+}
+
+function showResults(nfeList) {
+    const resultsDiv = document.getElementById('results');
+    const nfeListDiv = document.getElementById('nfeList');
+    
+    let html = '';
+    nfeList.forEach((nfe, index) => {
+        html += `
+            <div class="nfe-item">
+                <h3>📄 NF-e ${index + 1}</h3>
+                <p><strong>Chave:</strong> ${nfe.chave_nfe || 'N/A'}</p>
+                <p><strong>Emitente:</strong> ${nfe.nome_emitente || 'N/A'}</p>
+                <p><strong>Data:</strong> ${nfe.data_emissao || 'N/A'}</p>
+                <p><strong>Valor:</strong> R$ ${nfe.valor_total || '0,00'}</p>
+                <button type="button" class="download-btn" onclick="downloadXML('${nfe.chave_nfe}')">
+                    💾 Baixar XML
+                </button>
+            </div>
+        `;
+    });
+    
+    nfeListDiv.innerHTML = html;
+    resultsDiv.style.display = 'block';
+}
+
+function downloadXML(chaveNfe) {
+    window.open(`/api/download_xml/${chaveNfe}`, '_blank');
+}
+
+// Função para baixar todas as NF-e em ZIP
+document.getElementById('downloadAll').addEventListener('click', function() {
+    // Implementaremos isso no próximo passo
+    alert('Função de download em lote será implementada no próximo passo!');
+});
+</script>
+
+    </script>
+</body>
+</html>

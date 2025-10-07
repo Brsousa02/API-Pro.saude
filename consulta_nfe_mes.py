@@ -82,7 +82,7 @@ class SefazConsulta:
             return client
             
         except Exception as e:
-            self.logger.error(f"Erro ao criar cliente SOAP: {e}")
+            self.logger.error( "Erro ao criar cliente SOAP: " + str(e))
             raise
     
     def _montar_xml_requisicao(self, cnpj, ult_nsu="000000000000000"):
@@ -96,7 +96,7 @@ class SefazConsulta:
         Returns:
             lxml.etree._Element: Objeto XML da requisição
         """
-        xml_texto = f"""
+        xml_texto = """
         <distDFeInt xmlns="http://www.portalfiscal.inf.br/nfe" versao="1.01">
             <tpAmb>1</tpAmb>
             <cUFAutor>35</cUFAutor>
@@ -188,7 +188,7 @@ class SefazConsulta:
             }
             
         except Exception as e:
-            self.logger.error(f"Erro ao processar docZip: {e}")
+            self.logger.error("Erro ao processar docZip: " + str(e))
             return None
     
     def consultar_nfe(self, cnpj, mes=None, ano=None, ult_nsu="000000000000000"):
@@ -208,13 +208,13 @@ class SefazConsulta:
             # Limpar formatação do CNPJ
             cnpj_limpo = "".join(filter(str.isdigit, cnpj))
             if len(cnpj_limpo) == 11:  # CPF
-                cnpj_formatado = f"{cnpj_limpo[:3]}.{cnpj_limpo[3:6]}.{cnpj_limpo[6:9]}-{cnpj_limpo[9:]}"
+                cnpj_formatado = cnpj_limpo[:3] + "." + cnpj_limpo[3:6] + "." + cnpj_limpo[6:9] + "-" + cnpj_limpo[9:]
             elif len(cnpj_limpo) == 14:  # CNPJ
-                cnpj_formatado = f"{cnpj_limpo[:2]}.{cnpj_limpo[2:5]}.{cnpj_limpo[5:8]}/{cnpj_limpo[8:12]}-{cnpj_limpo[12:]}"
+                cnpj_formatado =cnpj_limpo[:2] + "." + cnpj_limpo[2:5] + "." + cnpj_limpo[5:8] + "/" + cnpj_limpo[8:12] + "-" + cnpj_limpo[12:]
             else:
                 raise ValueError("CNPJ/CPF inválido")
             
-            self.logger.info(f"Iniciando consulta para CNPJ: {cnpj_formatado}")
+            self.logger.info("Iniciando consulta para CNPJ: " + str(cnpj_formatado))
             
             # Criar cliente SOAP
             client = self._criar_cliente_soap()
@@ -257,8 +257,8 @@ class SefazConsulta:
                     
                     nfe_encontradas.append(nfe_data)
             
-            self.logger.info(f"Processamento concluído. Total de documentos: {total_documentos}, NF-e filtradas: {len(nfe_encontradas)}")
-            
+            self.logger.info("Processamento concluído. Total de documentos: " + str(total_documentos) + ", NF-e filtradas: " + str(len(nfe_encontradas)))
+
             return {
                 "sucesso": True,
                 "total_documentos": total_documentos,
@@ -267,7 +267,7 @@ class SefazConsulta:
             }
             
         except Exception as e:
-            self.logger.error(f"Erro na consulta SEFAZ: {e}")
+            self.logger.error("Erro na consulta SEFAZ: " + str(e))
             return {
                 "sucesso": False,
                 "erro": str(e),
@@ -312,10 +312,10 @@ def consultar_nfe_simples(cnpj, mes=None, ano=None, certificado_path=None, certi
 if __name__ == "__main__":
     # Teste do módulo
     resultado = consultar_nfe_simples("06.288.135/0021-24", 7, 2025)
-    print(f"Sucesso: {resultado["sucesso"]}")
+    print("Sucesso: " + str(resultado["sucesso"]))
     if resultado["sucesso"]:
-        print(f"NF-e encontradas: {len(resultado["nfe_encontradas"])}")
+        print("NF-e encontradas: " + str(len(resultado["nfe_encontradas"])))
         for nfe in resultado["nfe_encontradas"]:
-            print(f"- Chave: {nfe["chave_nfe"]}, Emitente: {nfe["nome_emitente"]}")
+            print("- Chave: " + str(nfe["chave_nfe"]) + ", Emitente: " + str(nfe["nome_emitente"]))
     else:
-        print(f"Erro: {resultado["erro"]}")
+        print( "Erro: " + str(resultado["erro"]) )

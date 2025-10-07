@@ -19,7 +19,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 try:
    from consulta_nfe_mes import SefazConsulta, consultar_nfe_simples
 except ImportError as e:
-    print("Erro ao importar módulo sefaz_consulta: {e}")
+    print("Erro ao importar módulo sefaz_consulta: " + str(e))
     print("Certifique-se de que o arquivo sefaz_consulta.py está no diretório pai")
     sys.exit(1)
 
@@ -299,7 +299,7 @@ def download_zip():
     try:
         consulta = SefazConsulta(CERTIFICADO_PATH, CERTIFICADO_SENHA)
         resultado = consultar_nfe_simples(cnpj, mes, ano, CERTIFICADO_PATH, CERTIFICADO_SENHA)
-
+        
         if resultado["sucesso"] and resultado["nfe_encontradas"]:
             memory_file = io.BytesIO()
             with zipfile.ZipFile(memory_file, 'w', zipfile.ZIP_DEFLATED) as zf:
