@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Consulta NF-e - SEFAZ</title>
+    <title>Consulta NF-e</title>
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -70,7 +70,7 @@
             margin-top: 10px;
         }
         .download-btn:hover {
-            background-color: #1e7e34;
+            background-color: #1f8136;
         }
         .error {
             color: #dc3545;
@@ -90,7 +90,7 @@
 </head>
 <body>
     <div class="container">
-        <h1>🧾 Sistema de Consulta NF-e</h1>
+        <h1> Sistema de Consulta NF-e</h1>
         
         <form id="consultaForm">
             <div class="form-group">
@@ -130,19 +130,19 @@
                 </select>
             </div>
             
-            <button type="submit">🔍 Consultar NF-e</button>
+            <button type="submit"> Consultar NF-e</button>
         </form>
         
         <div class="loading" id="loading">
-            <p>⏳ Consultando SEFAZ... Aguarde...</p>
+            <p> Consultando SEFAZ... Aguarde...</p>
         </div>
         
         <div id="message"></div>
         
         <div class="results" id="results">
-            <h2>📋 Resultados da Consulta</h2>
+            <h2> Resultados da Consulta</h2>
             <div id="nfeList"></div>
-            <button type="button" id="downloadAll" class="download-btn">📦 Baixar Todas as NF-e (ZIP)</button>
+            <button type="button" id="downloadAll" class="download-btn"> Baixar Todas as NF-e (ZIP)</button>
         </div>
     </div>
 
@@ -185,17 +185,17 @@ document.getElementById('consultaForm').addEventListener('submit', function(e) {
         if (data.sucesso) {
             if (data.nfe_encontradas && data.nfe_encontradas.length > 0) {
                 showResults(data.nfe_encontradas);
-                showMessage(`✅ Consulta realizada com sucesso! ${data.nfe_encontradas.length} NF-e encontrada(s).`, 'success');
+                showMessage(` Consulta realizada com sucesso! ${data.nfe_encontradas.length} NF-e encontrada(s).`, 'success');
             } else {
-                showMessage('ℹ️ Nenhuma NF-e encontrada para os critérios informados.', 'error');
+                showMessage('ℹ Nenhuma NF-e encontrada para os critérios informados.', 'error');
             }
         } else {
-            showMessage(`❌ Erro na consulta: ${data.erro}`, 'error');
+            showMessage(` Erro na consulta: ${data.erro}`, 'error');
         }
     })
     .catch(error => {
         document.getElementById('loading').style.display = 'none';
-        showMessage(`❌ Erro de conexão: ${error.message}`, 'error');
+        showMessage(` Erro de conexão: ${error.message}`, 'error');
     });
 });
 
@@ -212,13 +212,13 @@ function showResults(nfeList) {
     nfeList.forEach((nfe, index) => {
         html += `
             <div class="nfe-item">
-                <h3>📄 NF-e ${index + 1}</h3>
+                <h3> NF-e ${index + 1}</h3>
                 <p><strong>Chave:</strong> ${nfe.chave_nfe || 'N/A'}</p>
                 <p><strong>Emitente:</strong> ${nfe.nome_emitente || 'N/A'}</p>
                 <p><strong>Data:</strong> ${nfe.data_emissao || 'N/A'}</p>
                 <p><strong>Valor:</strong> R$ ${nfe.valor_total || '0,00'}</p>
                 <button type="button" class="download-btn" onclick="downloadXML('${nfe.chave_nfe}')">
-                    💾 Baixar XML
+                     Baixar XML
                 </button>
             </div>
         `;

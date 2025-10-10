@@ -35,7 +35,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Configurações da aplicação (podem ser movidas para arquivo de config)
-CERTIFICADO_PATH = r"C:\Users\bruno.sousa\Documents\API-Pr-saude\certificado.pfx"
+CERTIFICADO_PATH = r"C:\Users\bruno.sousa\Documents\API-Pr-saude\API-Pro.saude\certificado.pfx"
 CERTIFICADO_SENHA = "Abcd1234"  # Em produção, usar variável de ambiente
 DATA_DIR = os.path.join(os.path.dirname(__file__), 'data')
 
