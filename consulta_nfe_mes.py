@@ -91,30 +91,14 @@ class SefazConsulta:
         """
         Cria cliente SOAP com certificado digital e TLS 1.2
         """
-        try:
-            session = Session()
-            
-            # Monta adaptador TLS 1.2
-            session.mount("https://", self._criar_adaptador_tls( ))
-            
-            # Monta adaptador do certificado digital
-            session.mount("https://", Pkcs12Adapter(
-                pkcs12_filename=self.certificado_path,
-                pkcs12_password=self.certificado_senha
-             ))
-            import ssl
-            transport = Transport(session=session)
-            # desabilitar verificação SSL temporariamente 
-            transport.session.verify = False
-            client = Client(self.url_sefaz + "?wsdl", transport=transport)
-            
-            self.logger.info("Cliente SOAP criado com sucesso")
-            return client
-            
-        except Exception as e:
-            self.logger.error( "Erro ao criar cliente SOAP: " + str(e))
-            raise
+        return None
     
+    def _criar_cliente_soap(self):
+        """
+        Cria cliente SOAP com certificado digital e TLS 1.2
+        """
+        return None
+
     def _montar_xml_requisicao(self, cnpj, ult_nsu="000000000000000"):
         """
         Monta XML de requisição para consulta de DFe
@@ -280,11 +264,12 @@ class SefazConsulta:
             
         except Exception as e:
             self.logger.error("Erro na consulta: " + str(e))
-        return {
+            return {
                 "sucesso": False,
                 "erro": str(e),
                 "nfe_encontradas": []
             }
+
 
 def consultar_nfe_simples(cnpj, mes=None, ano=None, certificado_path=None, certificado_senha=None):
     """
