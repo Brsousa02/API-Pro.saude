@@ -167,38 +167,35 @@ document.getElementById('consultaForm').addEventListener('submit', function(e) {
     document.getElementById('results').style.display = 'none';
     document.getElementById('message').innerHTML = '';
     
-    // Fazer requisição para a API
-    fetch('/api/consultar', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-            cnpj: cnpj,
-            mes: mes || null,
-            ano: ano || null
-        })
-    })
-    .then(response => response.json())
-    .then(data => {
-        document.getElementById('loading').style.display = 'none';
-        
-        if (data.sucesso) {
-            if (data.nfe_encontradas && data.nfe_encontradas.length > 0) {
-                showResults(data.nfe_encontradas);
-                showMessage(` Consulta realizada com sucesso! ${data.nfe_encontradas.length} NF-e encontrada(s).`, 'success');
+   // Fazer requisição para a API
+        fetch("/api/consultar", {
+            method: 'POST',   
+            headers: { 
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ cnpj: cnpj, mes: mes, ano: ano })
+        }) // <-- ESTE É O PARÊNTESE ')' QUE FALTAVA
+        .then(response => response.json())
+        .then(data => {
+            document.getElementById('loading').style.display = 'none';
+
+            if (data.sucesso) {
+                if (data.nfe_encontradas && data.nfe_encontradas.length > 0) {
+                    showResults(data.nfe_encontradas);
+                    showMessage(`Consulta realizada com sucesso! ${data.nfe_encontradas.length} NF-e encontrada(s).`, 'success');
+                } else {
+                    showMessage("Nenhuma NF-e encontrada para os critérios informados.", 'error');
+                }
             } else {
-                showMessage('ℹ Nenhuma NF-e encontrada para os critérios informados.', 'error');
+                showMessage(`Erro na consulta: ${data.erro}`, 'error');
             }
-        } else {
-            showMessage(` Erro na consulta: ${data.erro}`, 'error');
-        }
-    })
-    .catch(error => {
-        document.getElementById('loading').style.display = 'none';
-        showMessage(` Erro de conexão: ${error.message}`, 'error');
+        })
+        .catch(error => {
+            document.getElementById('loading').style.display = 'none';
+            showMessage(`Erro de conexao: ${error.message}`, 'error');
+        });
+
     });
-});
 
 function showMessage(message, type) {
     const messageDiv = document.getElementById('message');

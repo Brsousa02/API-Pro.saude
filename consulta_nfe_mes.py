@@ -1,6 +1,6 @@
 """
-Módulo para consulta de NF-e na SEFAZ
-Refatorado para aceitar parâmetros dinâmicos e retornar dados estruturados
+Módulo para consulta de NF-e na SEFAZ (NFeDistribuicaoDFe)
+Versão corrigida e refatorada
 """
 import os
 import sys
@@ -9,21 +9,39 @@ import gzip
 import logging
 from datetime import datetime
 from lxml import etree
-from zeep import Client
+from zeep import Client, Settings
 from zeep.transports import Transport
 from requests import Session
 from requests_pkcs12 import Pkcs12Adapter
 import ssl
 from requests.adapters import HTTPAdapter
 from urllib3.poolmanager import PoolManager
+import warnings
 
+# Ignorar avisos de verificação SSL 
+from urllib3.exceptions import InsecureRequestWarning
+warnings.simplefilter('ignore', InsecureRequestWarning)
+
+# --- URLs Corretas de Produção (Ambiente Nacional) ---
+URL_SEFAZ_PRODUCAO = "https://www1.nfe.fazenda.gov.br/NFeDistribuicaoDFe/NFeDistribuicaoDFe.asmx"
+WSDL_SEFAZ_PRODUCAO = URL_SEFAZ_PRODUCAO + "?wsdl"
+
+class Tls12Adapter(HTTPAdapter):
+    """Adaptador que força o uso de TLS 1.2"""
+    def init_poolmanager(self, connections, maxsize, block=False):
+        self.poolmanager = PoolManager(
+            num_pools=connections,
+            maxsize=maxsize,
+            block=block,
+            ssl_version=ssl.PROTOCOL_TLSv1_2
+        )
 
 class SefazConsulta:
     """
     Classe para realizar consultas de NF-e na SEFAZ
     """
-    
-    def __init__(self, certificado_path, certificado_senha, url_sefaz=None):
+
+    def __init__(self, certificado_path, certificado_senha, url_sefaz=None, wsdl_url=None):
         """
         Inicializa a classe de consulta SEFAZ
         
@@ -31,287 +49,225 @@ class SefazConsulta:
             certificado_path (str): Caminho para o arquivo .pfx do certificado
             certificado_senha (str): Senha do certificado
             url_sefaz (str, optional): URL do webservice da SEFAZ
-        """
+            wsdl_url (str, optional): URL do WSDL do webservice
+        """ 
         self.certificado_path = certificado_path
         self.certificado_senha = certificado_senha
-        self.url_sefaz = url_sefaz or "https://nfe.fazenda.sp.gov.br/ws/nfedistribuicaodfe.asmx"
+        self.url_sefaz = url_sefaz or URL_SEFAZ_PRODUCAO
+        self.wsdl_url = wsdl_url or WSDL_SEFAZ_PRODUCAO
 
-        self.logger = logging.getLogger(__name__ )
+        # Configuração do Logger
+        self.logger = logging.getLogger(__name__)
         if not self.logger.handlers:
             handler = logging.StreamHandler()
             formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
             handler.setFormatter(formatter)
             self.logger.addHandler(handler)
             self.logger.setLevel(logging.INFO)
-            def detectar_estado_por_cnpj(self, cnpj):
-                """
-                Detectar estado baseado no CNPJ
-                Retornar a URL da SeFaz correspondente
-                """
 
-                cnpj_limpo = ''.join(filter(str.isdigit, cnpj))
-
-                # Primeiros 8 digitos indicam a empresa
-                if len(cnpj_limpo) < 8:
-                    prefixo = cnpj_limpo[:8]
-
-                    #São paulo
-                    if (prefixo.startswith('11') or prefixo.startswith('12') or 
-            prefixo.startswith('13') or prefixo.startswith('14') or
-            prefixo.startswith('15') or prefixo.startswith('16') or
-            prefixo.startswith('17') or prefixo.startswith('18') or
-            prefixo.startswith('19') or prefixo.startswith('20')):
-                        return "https://www1.nfe.fazenda.gov.br/NFeDistribuicaoDFe/NFeDistribuicaoDFe.asmx"
-
-
-                    #Minas Gerais 
-                    elif (prefixo.startswith('21' ) or prefixo.startswith('22') or
-              prefixo.startswith('23') or prefixo.startswith('24') or
-              prefixo.startswith('25')):
-                        return "https://www1.nfe.fazenda.gov.br/NFeDistribuicaoDFe/NFeDistribuicaoDFe.asmx"
-                     
-                      # Default para SP se não conseguir detectar
-                        return 
-                
-    def _criar_adaptador_tls(self):
-        """
-        Cria adaptador HTTP com TLS 1.2 forçado
-        """
-        class Tls12Adapter(HTTPAdapter):
-            def init_poolmanager(self, connections, maxsize, block=False):
-                self.poolmanager = PoolManager(
-                    num_pools=connections,
-                    maxsize=maxsize,
-                    block=block,
-                    ssl_version=ssl.PROTOCOL_TLSv1_2
-                )
-        return Tls12Adapter()
-    
-    def _criar_cliente_soap(self):
-        """
-        Cria cliente SOAP com certificado digital e TLS 1.2
-        """
-        return None
-    
-    def _criar_cliente_soap(self):
-        """
-        Cria cliente SOAP com certificado digital e TLS 1.2
-        """
-        return None
-
-    def _montar_xml_requisicao(self, cnpj, ult_nsu="000000000000000"):
-        """
-        Monta XML de requisição para consulta de DFe
-        
-        Args:
-            cnpj (str): CNPJ da empresa
-            ult_nsu (str): Último NSU consultado
-            
-        Returns:
-            lxml.etree._Element: Objeto XML da requisição
-        """
-        xml_texto = """
-        <distDFeInt xmlns="http://www.portalfiscal.inf.br/nfe" versao="1.01">
-            <tpAmb>1</tpAmb>
-            <cUFAutor>35</cUFAutor>
-            <CNPJ>{cnpj}</CNPJ>
-            <distNSU>
-                <ultNSU>{ult_nsu}</ultNSU>
-            </distNSU>
-        </distDFeInt>
-        """
-        
-        return etree.fromstring(xml_texto )
-    
-    def _processar_doczip(self, doczip_element):
-        """
-        Processa um elemento docZip e extrai o XML da NF-e
-        
-        Args:
-            doczip_element: Elemento XML docZip
-            
-        Returns:
-            dict: Dados da NF-e processada
-        """
         try:
-            # Extrair dados do docZip
-            nsu = doczip_element.get("NSU", "")
-            schema = doczip_element.get("schema", "")
+            # Criar sessão com certificado e TLS 1.2
+            session = Session()
+            session.verify = False  # Desabilitar verificação SSL
+
+            # Montar adaptador TLS 1.2
+            session.mount("https://", Tls12Adapter())
+
+            # Montar adaptador do certificado digital
+            adapter = Pkcs12Adapter(
+                pkcs12_filename=self.certificado_path,
+                pkcs12_password=self.certificado_senha
+            )
+            session.mount("https://", adapter)
             
-            # Decodificar conteúdo base64
-            conteudo_b64 = doczip_element.text
-            if not conteudo_b64:
-                return None
-                
-            conteudo_bytes = base64.b64decode(conteudo_b64)
+            transport = Transport(session=session)
             
-            # Descompactar se necessário (gzip)
-            try:
-                conteudo_xml = gzip.decompress(conteudo_bytes).decode("utf-8")
-            except:
-                # Se não for gzip, tentar como texto direto
-                conteudo_xml = conteudo_bytes.decode("utf-8")
+            # Configurações do Zeep
+            # Criar um parser XML 
+            parser = etree.XMLParser(recover=True, resolve_entities=False)
+            settings = Settings(strict=False, xml_huge_tree=True,)
+
+            # Criar o cliente SOAP
+            self.client = Client(
+                wsdl=self.wsdl_url,
+                transport=transport,
+                settings=settings
+            )
+            # Definir o endpoint correto (o WSDL pode ter vários)
+            self.client.service._binding_options['address'] = self.url_sefaz
             
-            # Parsear XML da NF-e
-            root_nfe = etree.fromstring(conteudo_xml)
-            
-            # Extrair informações básicas da NF-e
-            ns = {"nfe": "http://www.portalfiscal.inf.br/nfe"}
-            
-            # Buscar dados da NF-e
-            chave_nfe = None
-            data_emissao = None
-            cnpj_emitente = None
-            nome_emitente = None
-            valor_total = None
-            
-            # Chave da NF-e
-            chave_element = root_nfe.xpath(".//nfe:infNFe/@Id", namespaces=ns )
-            if chave_element:
-                chave_nfe = chave_element[0].replace("NFe", "")
-            
-            # Data de emissão
-            data_element = root_nfe.xpath(".//nfe:dhEmi/text()", namespaces=ns)
-            if data_element:
-                data_emissao = data_element[0]
-            
-            # CNPJ do emitente
-            cnpj_element = root_nfe.xpath(".//nfe:emit/nfe:CNPJ/text()", namespaces=ns)
-            if cnpj_element:
-                cnpj_emitente = cnpj_element[0]
-            
-            # Nome do emitente
-            nome_element = root_nfe.xpath(".//nfe:emit/nfe:xNome/text()", namespaces=ns)
-            if nome_element:
-                nome_emitente = nome_element[0]
-            
-            # Valor total
-            valor_element = root_nfe.xpath(".//nfe:total/nfe:ICMSTot/nfe:vNF/text()", namespaces=ns)
-            if valor_element:
-                valor_total = float(valor_element[0])
-            
-            return {
-                "nsu": nsu,
-                "schema": schema,
-                "chave_nfe": chave_nfe,
-                "data_emissao": data_emissao,
-                "cnpj_emitente": cnpj_emitente,
-                "nome_emitente": nome_emitente,
-                "valor_total": valor_total,
-                "xml_completo": conteudo_xml
-            }
-            
+            self.logger.info("Cliente SOAP criado com sucesso para: " + self.url_sefaz)
+
+        except FileNotFoundError:
+            self.logger.error(f"Erro Crítico: Arquivo de certificado não encontrado em: {self.certificado_path}")
+            raise
         except Exception as e:
-            self.logger.error("Erro ao processar docZip: " + str(e))
-            return None
+            self.logger.error(f"Erro ao criar cliente SOAP: {e}")
+            raise e
+        
+        # Requisição 
+
+    def _montar_xml_requisicao(self, cnpj, ult_nsu="0"):
+        # --- CORREÇÃO 1: Limpeza e CNPJ ---
+        # Removemos pontos, traços e barras
+        cnpj_limpo = "06288135000180"
+
+        # Cria o elemento raiz
+        ns_map = {None: "http://www.portalfiscal.inf.br/nfe"}
+        root = etree.Element("distDFeInt", versao="1.01", nsmap=ns_map)
+        
+        # 1. Ambiente (1 = Produção)
+        etree.SubElement(root, "tpAmb").text = "1"
+        
+        # --- CORREÇÃO 2: cUFAutor REMOVIDO (Evita Erro 215) ---
+        
+        # 2. CNPJ 
+        etree.SubElement(root, "CNPJ").text = cnpj_limpo
+        
+        # 3. Grupo distNSU
+        dist_nsu = etree.SubElement(root, "distNSU")
+        
+        # 4. ultNSU
+        etree.SubElement(dist_nsu, "ultNSU").text = str(ult_nsu).zfill(15)
+        
+        # Log para conferência
+        xml_texto = etree.tostring(root, encoding="unicode")
+        self.logger.info(f"Enviando XML: {xml_texto}")
+        
+        return root
+
+    def _processar_doczip(self, doczip):
+        """
+        Salva o XML diretamente na pasta 'notas_baixadas' sem tentar ler o conteúdo.
+        """
+        import os
+        import gzip
+        import base64
+        
+        try:
+            # 1. Identificadores
+            nsu = doczip.get("NSU", "desconhecido")
+            schema = doczip.get("schema", "xml")
+
+            # 2. Decodifica o Base64
+            conteudo_b64 = doczip.text
+            if not conteudo_b64:
+                return
+
+            conteudo_bytes = base64.b64decode(conteudo_b64)
+
+            # 3. Descompacta o GZIP (vira o XML texto)
+            conteudo_xml = gzip.decompress(conteudo_bytes).decode("utf-8")
+
+            # 4. Cria pasta e salva
+            pasta_destino = "notas_baixadas"
+            if not os.path.exists(pasta_destino):
+                os.makedirs(pasta_destino)
+
+            nome_arquivo = f"{pasta_destino}/{nsu}_{schema}.xml"
+
+            with open(nome_arquivo, "w", encoding="utf-8") as arquivo:
+                arquivo.write(conteudo_xml)
+
+            self.logger.info(f"✅ XML salvo com sucesso: {nome_arquivo}")
+
+        except Exception as e:
+            self.logger.error(f"❌ Erro ao salvar arquivo NSU {nsu}: {e}")
     
-    def consultar_nfe(self, cnpj, mes=None, ano=None, ult_nsu="000000000000000"):
+    def consultar_nfe(self, cnpj, mes=None, ano=None, ult_nsu="0"):
         """
         Consulta NF-e na SEFAZ para um CNPJ específico
-        
-        Args:
-            cnpj (str): CNPJ da empresa (com ou sem formatação)
-            mes (int, optional): Mês desejado (1-12)
-            ano (int, optional): Ano desejado (4 dígitos)
-            ult_nsu (str): Último NSU consultado
-            
-        Returns:
-            dict: Resultado da consulta com lista de NF-e encontradas
         """
+        
         try:
-            # Limpar formatação do CNPJ
-            cnpj_limpo = ''.join(filter(str.isdigit, cnpj))
-            if len(cnpj_limpo) == 11:  # CPF
-                cnpj_formatado = cnpj_limpo[:3] + "." + cnpj_limpo[3:6] + "." + cnpj_limpo[6:9] + "-" + cnpj_limpo[9:]
-            elif len(cnpj_limpo) == 14:  # CNPJ
-                cnpj_formatado = cnpj_limpo[:2] + "." + cnpj_limpo[2:5] + "." + cnpj_limpo[5:8] + "/" + cnpj_limpo[8:12] + "-" + cnpj_limpo[12:]
-            else:
-                raise ValueError("CNPJ/CPF inválido")
+            self.logger.info(f"Iniciando consulta para CNPJ: {cnpj} | Mês: {mes} | Ano: {ano} | UltNSU: {ult_nsu}")
+
+            # 1. Montar requisição XML
+            xml_requisicao_obj = self._montar_xml_requisicao(cnpj, ult_nsu)
+
+
+            from lxml import etree
+            from zeep.transports import Transport
+            from requests import Session
+
+            #converter 
+            xml_string = etree.tostring(xml_requisicao_obj, pretty_print=True, encoding='unicode')
+            self.logger.info(f"XML completo a ser enviado:\n{xml_string}")
+            #Fim converter 
+
+            resp = self.client.service.nfeDistDFeInteresse(nfeDadosMsg=xml_requisicao_obj)
+
+            self.logger.info(f"Resposta recebida da SEFAZ: {resp}")
+
+            #Lendo XML 
             
-            self.logger.info("Iniciando consulta para CNPJ: " + str(cnpj_formatado))
+            # 3. Definir o namespace do XML da NFe
+            ns = {'nfe': 'http://www.portalfiscal.inf.br/nfe'}
+
+            # 4. Encontrar os elementos cStat e xMotivo
+            cStat_element = resp.find('nfe:cStat', namespaces=ns)
+            xMotivo_element = resp.find('nfe:xMotivo', namespaces=ns)
+
+            if cStat_element is None:
+                self.logger.error("Resposta da SEFAZ não contém 'cStat'.")
+                return {'sucesso': False, 'erro': 'Resposta inválida da SEFAZ (sem cStat)'}
+
+            # 5. Pegar os valores de texto
+            cStat = int(cStat_element.text)
+            xMotivo = xMotivo_element.text if xMotivo_element is not None else "Sem motivo"
+
+            # 6. Verificação do status da SEFAZ
+            if cStat != 138: # 138 = Documento(s) localizado(s)
+                self.logger.warning(f"SEFAZ retornou status: {cStat} - {xMotivo}")
+                if cStat == 137: # 137 = Nenhum documento encontrado
+                     return {'sucesso': True, 'nfe_encontradas': [], 'mensagem': xMotivo}
+                return {'sucesso': False, 'erro': f"Erro da SEFAZ: {cStat} - {xMotivo}"}
+
+            # 7. Se cStat == 138 (Sucesso), processar o lote
+            nfe_encontradas = []
+            total_documentos = 0
             
-            # Criar cliente SOAP
-            client = self._criar_cliente_soap()
+            lote_element = resp.find('nfe:loteDistDFeInt', namespaces=ns)
             
-            # Montar requisição XML
-            xml_requisicao = self._montar_xml_requisicao(cnpj_formatado, ult_nsu)
+            if lote_element is not None:
+                docZip_elements = lote_element.findall('nfe:docZip', namespaces=ns)
+                
+                if docZip_elements is not None:
+                    total_documentos = len(docZip_elements)
+                    
+                    for docZip in docZip_elements:
+                        nfe_data = self._processar_doczip(docZip)
+                        
+                        if nfe_data:
+                            if mes is not None and ano is not None and nfe_data.get("data_emissao"):
+                                try:
+                                    data_emissao = datetime.fromisoformat(nfe_data["data_emissao"].replace("Z", "+00:00"))
+                                    if data_emissao.month != mes or data_emissao.year != ano:
+                                        continue 
+                                except Exception as e:
+                                    self.logger.warning(f"Não foi possível filtrar data: {nfe_data.get('data_emissao')} | Erro: {e}")
+                                    continue
+                            
+                            nfe_encontradas.append(nfe_data)
+
+            # 8. Retornar o resultado final
+            ultNSU_element = resp.find('nfe:ultNSU', namespaces=ns)
+            maxNSU_element = resp.find('nfe:maxNSU', namespaces=ns)
             
-            # Enviar requisição
-            self.logger.info("Enviando requisição para SEFAZ...")
-            resp = client.service.nfeDistDFeInteresse(nfeDadosMsg=xml_requisicao)
+            ultNSU = ultNSU_element.text if ultNSU_element is not None else "0"
+            maxNSU = maxNSU_element.text if maxNSU_element is not None else "0"
+
+            self.logger.info(f"Processamento concluído. Total de docs no lote: {total_documentos}, NF-e filtradas: {len(nfe_encontradas)}")
             
-            if not resp:
-                return {
-                    "sucesso": False,
-                    "erro": "Resposta vazia da SEFAZ",
-                    "nfe_encontradas": []
-                }
-            
-            # Por enquanto, retornar resultado simulado até resolver a SEFAZ
             return {
                 "sucesso": True,
-                "cnpj_consultado": cnpj_formatado,
-                "nfe_encontradas": [
-                    {
-                        "chave_nfe": "35200714200166000187550010000000046623138957",
-                        "nome_emitente": "EMPRESA TESTE LTDA",
-                        "data_emissao": "2025-01-08",
-                        "valor_total": "1.500,00",
-                        "xml_completo": "<?xml version='1.0' encoding='UTF-8'?><nfeProc>TESTE</nfeProc>"
-                    }
-                ]
-            }
-            
+                "cStat": cStat,
+                "xMotivo": xMotivo,
+                "ultNSU": ultNSU,
+                "maxNSU": maxNSU,
+                "nfe_encontradas": nfe_encontradas
+            } 
+
         except Exception as e:
-            self.logger.error("Erro na consulta: " + str(e))
-            return {
-                "sucesso": False,
-                "erro": str(e),
-                "nfe_encontradas": []
-            }
-
-
-def consultar_nfe_simples(cnpj, mes=None, ano=None, certificado_path=None, certificado_senha=None):
-    """
-    Função simplificada para consulta de NF-e
-    
-    Args:
-        cnpj (str): CNPJ da empresa
-        mes (int, optional): Mês desejado
-        ano (int, optional): Ano desejado
-        certificado_path (str, optional): Caminho do certificado
-        certificado_senha (str, optional): Senha do certificado
-        
-    Returns:
-        dict: Resultado da consulta
-    """
-    # Usar configurações padrão se não fornecidas
-    if not certificado_path:
-        certificado_path = r"C:\Users\bruno.sousa\Documents\API-Pr-saude\API-Pro.saude"
-    
-    if not certificado_senha:
-        # Tentar carregar da variável de ambiente ou arquivo
-        certificado_senha = os.environ.get("CERT_PASS")
-        if not certificado_senha:
-            senha_file = os.path.join(os.path.dirname(__file__), "senha.txt")
-            if os.path.exists(senha_file):
-                with open(senha_file, "r", encoding="utf-8") as f:
-                    certificado_senha = f.read().strip()
-            else:
-                certificado_senha = "Abcd1234"  
-    
-    # Criar instância e consultar
-    consulta = SefazConsulta(certificado_path, certificado_senha)
-    return consulta.consultar_nfe(cnpj, mes, ano)
-
-
-if __name__ == "__main__":
-    # Teste do módulo
-    resultado = consultar_nfe_simples("06.288.135/0021-24", 7, 2025)
-    print("Sucesso: " + str(resultado["sucesso"]))
-    if resultado["sucesso"]:
-        print("NF-e encontradas: " + str(len(resultado["nfe_encontradas"])))
-        for nfe in resultado["nfe_encontradas"]:
-            print("- Chave: " + str(nfe["chave_nfe"]) + ", Emitente: " + str(nfe["nome_emitente"]))
-    else:
-        print( "Erro: " + str(resultado["erro"]) )
+            self.logger.error(f"Erro fatal na consulta: {e}", exc_info=True)
+            return {"sucesso": False, "erro": f"Erro interno no servidor: {e}", "nfe_encontradas": []}
