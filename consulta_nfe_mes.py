@@ -22,7 +22,7 @@ import warnings
 from urllib3.exceptions import InsecureRequestWarning
 warnings.simplefilter('ignore', InsecureRequestWarning)
 
-# --- URLs Corretas de Produção (Ambiente Nacional) ---
+# URLs Corretas de Produção 
 URL_SEFAZ_PRODUCAO = "https://www1.nfe.fazenda.gov.br/NFeDistribuicaoDFe/NFeDistribuicaoDFe.asmx"
 WSDL_SEFAZ_PRODUCAO = URL_SEFAZ_PRODUCAO + "?wsdl"
 
@@ -108,7 +108,6 @@ class SefazConsulta:
         # Requisição 
 
     def _montar_xml_requisicao(self, cnpj, ult_nsu="0"):
-        # --- CORREÇÃO 1: Limpeza e CNPJ ---
         # Removemos pontos, traços e barras
         cnpj_limpo = "06288135000180"
 
@@ -116,18 +115,16 @@ class SefazConsulta:
         ns_map = {None: "http://www.portalfiscal.inf.br/nfe"}
         root = etree.Element("distDFeInt", versao="1.01", nsmap=ns_map)
         
-        # 1. Ambiente (1 = Produção)
+        # Ambiente (Produção)
         etree.SubElement(root, "tpAmb").text = "1"
         
-        # --- CORREÇÃO 2: cUFAutor REMOVIDO (Evita Erro 215) ---
-        
-        # 2. CNPJ 
+        # CNPJ 
         etree.SubElement(root, "CNPJ").text = cnpj_limpo
         
-        # 3. Grupo distNSU
+        # Grupo distNSU
         dist_nsu = etree.SubElement(root, "distNSU")
         
-        # 4. ultNSU
+        # ultNSU
         etree.SubElement(dist_nsu, "ultNSU").text = str(ult_nsu).zfill(15)
         
         # Log para conferência
@@ -145,22 +142,35 @@ class SefazConsulta:
         import base64
         
         try:
-            # 1. Identificadores
+            #  Identificadores
             nsu = doczip.get("NSU", "desconhecido")
             schema = doczip.get("schema", "xml")
-
-            # 2. Decodifica o Base64
+            # Não vir resumido 
+            if "procNFe" not in schema:
+                return None
+            #  Decodifica o Base64
             conteudo_b64 = doczip.text
             if not conteudo_b64:
                 return
 
             conteudo_bytes = base64.b64decode(conteudo_b64)
 
-            # 3. Descompacta o GZIP (vira o XML texto)
+            # Descompacta o GZIP (vira o XML texto)
             conteudo_xml = gzip.decompress(conteudo_bytes).decode("utf-8")
 
-            # 4. Cria pasta e salva
-            pasta_destino = "notas_baixadas"
+            root_nfe = etree.fromstring(conteudo_xml)
+            ns = {"nfe": "http://www.portalfiscal.inf.br/nfe"}
+
+            #Buscar o CNPJ 
+            cnpj_dest = root_nfe.xpath(".//nfe:dest/nfe:CNPJ/text()", namespaces=ns)
+            if cnpj_dest:
+                cnpj_encontrado = cnpj_dest[0]
+                # Se o CNPJ da nota não for da filial, ignorar
+                if cnpj_encontrado != "06288135002124":
+                    return None
+
+            # Cria pasta e salva
+            pasta_destino = "Notas abaixadas"
             if not os.path.exists(pasta_destino):
                 os.makedirs(pasta_destino)
 
@@ -169,10 +179,10 @@ class SefazConsulta:
             with open(nome_arquivo, "w", encoding="utf-8") as arquivo:
                 arquivo.write(conteudo_xml)
 
-            self.logger.info(f"✅ XML salvo com sucesso: {nome_arquivo}")
+            self.logger.info(f" XML salvo com sucesso: {nome_arquivo}")
 
         except Exception as e:
-            self.logger.error(f"❌ Erro ao salvar arquivo NSU {nsu}: {e}")
+            self.logger.error(f" Erro ao salvar arquivo NSU {nsu}: {e}")
     
     def consultar_nfe(self, cnpj, mes=None, ano=None, ult_nsu="0"):
         """
@@ -182,7 +192,7 @@ class SefazConsulta:
         try:
             self.logger.info(f"Iniciando consulta para CNPJ: {cnpj} | Mês: {mes} | Ano: {ano} | UltNSU: {ult_nsu}")
 
-            # 1. Montar requisição XML
+            # Montar requisição XML
             xml_requisicao_obj = self._montar_xml_requisicao(cnpj, ult_nsu)
 
 
@@ -190,10 +200,10 @@ class SefazConsulta:
             from zeep.transports import Transport
             from requests import Session
 
-            #converter 
+            # converter 
             xml_string = etree.tostring(xml_requisicao_obj, pretty_print=True, encoding='unicode')
             self.logger.info(f"XML completo a ser enviado:\n{xml_string}")
-            #Fim converter 
+            # Fim converter 
 
             resp = self.client.service.nfeDistDFeInteresse(nfeDadosMsg=xml_requisicao_obj)
 
@@ -201,10 +211,10 @@ class SefazConsulta:
 
             #Lendo XML 
             
-            # 3. Definir o namespace do XML da NFe
+            # Definir o namespace do XML da NFe
             ns = {'nfe': 'http://www.portalfiscal.inf.br/nfe'}
 
-            # 4. Encontrar os elementos cStat e xMotivo
+            # Encontrar os elementos cStat e xMotivo
             cStat_element = resp.find('nfe:cStat', namespaces=ns)
             xMotivo_element = resp.find('nfe:xMotivo', namespaces=ns)
 
@@ -212,18 +222,18 @@ class SefazConsulta:
                 self.logger.error("Resposta da SEFAZ não contém 'cStat'.")
                 return {'sucesso': False, 'erro': 'Resposta inválida da SEFAZ (sem cStat)'}
 
-            # 5. Pegar os valores de texto
+            # Pegar os valores de texto
             cStat = int(cStat_element.text)
             xMotivo = xMotivo_element.text if xMotivo_element is not None else "Sem motivo"
 
-            # 6. Verificação do status da SEFAZ
+            # Verificação do status da SEFAZ
             if cStat != 138: # 138 = Documento(s) localizado(s)
                 self.logger.warning(f"SEFAZ retornou status: {cStat} - {xMotivo}")
                 if cStat == 137: # 137 = Nenhum documento encontrado
                      return {'sucesso': True, 'nfe_encontradas': [], 'mensagem': xMotivo}
                 return {'sucesso': False, 'erro': f"Erro da SEFAZ: {cStat} - {xMotivo}"}
 
-            # 7. Se cStat == 138 (Sucesso), processar o lote
+            # processar o lote
             nfe_encontradas = []
             total_documentos = 0
             
@@ -250,7 +260,7 @@ class SefazConsulta:
                             
                             nfe_encontradas.append(nfe_data)
 
-            # 8. Retornar o resultado final
+            # Retornar o resultado final
             ultNSU_element = resp.find('nfe:ultNSU', namespaces=ns)
             maxNSU_element = resp.find('nfe:maxNSU', namespaces=ns)
             

@@ -3,7 +3,6 @@ Aplicação Flask para consulta de NF-e na SEFAZ
 Interface web para o módulo sefaz_consulta
 """
 
-# 1. IMPORTS
 from flask import Flask, render_template, request, jsonify, send_file
 import os
 import sys
@@ -15,10 +14,11 @@ import zipfile
 import io
 from dotenv import load_dotenv
 
-# 2. CARREGAR VARIÁVEIS DE AMBIENTE
+
+# CARREGAR VARIÁVEIS DE AMBIENTE
 load_dotenv()
 
-# 3. CONFIGURAÇÕES GLOBAIS
+# CONFIGURAÇÕES GLOBAIS
 # O caminho
 CERTIFICADO_PATH = r"C:\Users\bruno.sousa\Documents\.env\Certificado.pfx"
 # A senha 
@@ -30,22 +30,53 @@ DATA_DIR = os.path.join(os.path.dirname(__file__), 'data')
 if not os.path.exists(DATA_DIR):
     os.makedirs(DATA_DIR, exist_ok=True)
 
+    # Funções para gerenciar o último NSU
+NSU_FILE = os.path.join(DATA_DIR, "ultimo_nsu.txt")
+
+def get_ultimo_nsu():
+    """Lê o último NSU salvo, ou retorna '0' se não existir."""
+    if os.path.exists(NSU_FILE):
+        with open(NSU_FILE, 'r') as f:
+            return f.read().strip()
+    return "0"
+
+def save_ultimo_nsu(nsu):
+    """Salva o novo NSU no arquivo."""
+    with open(NSU_FILE, 'w') as f:
+        f.write(str(nsu))
+
+def contar_notas_salvas():
+    """Conta quantas notas já temos salvas na pasta data"""
+    total = 0
+    if os.path.exists(DATA_DIR):
+        for nome_arquivo in os.listdir(DATA_DIR):
+            if nome_arquivo.startswith("consulta_") and nome_arquivo.endswith(".json"):
+                caminho = os.path.join(DATA_DIR, nome_arquivo)
+                try:
+                    with open(caminho, 'r', encoding='utf-8') as f:
+                        dados = json.load(f)
+                        if 'nfe_encontradas' in dados:
+                            total += len(dados['nfe_encontradas'])
+                except:
+                    pass
+    return total
+
 # Adicionar o diretório do módulo ao path do sistema
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 try:
-    # Importar APENAS a classe principal
+    # Importar apenas a classe principal
     from consulta_nfe_mes import SefazConsulta
 except ImportError as e:
     print(f"Erro ao importar módulo sefaz_consulta: {e}")
     print("Certifique-se de que o arquivo consulta_nfe_mes.py está no diretório correto")
     sys.exit(1)
 
-# 4. INICIALIZAÇÃO DO APP FLASK
+# Iniciar o flask app
 app = Flask(__name__)
-print("!!!!!!!!!! O SERVIDOR REINICIOU COM O CÓDIGO NOVO !!!!!!!!!!")
-app.config['SECRET_KEY'] = 'sua_chave_secreta_aqui' # Mude em produção
+print(" O SERVIDOR REINICIOU COM O CÓDIGO NOVO")
+app.config['SECRET_KEY'] = 'sua_chave_secreta_aqui' 
 
-# 5. CONFIGURAÇÃO DO LOGGING (APENAS UMA VEZ)
+# CONFIGURAÇÃO DO LOGGING 
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
@@ -53,7 +84,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-# 6. DEFINIÇÃO DAS ROTAS
+# DEFINIÇÃO DAS ROTAS
 @app.route('/')
 def index():
     """
@@ -101,9 +132,27 @@ def consultar_nfe():
         if ano_str == "":
             ano_numero = None # Permite busca sem ano
 
-        logger.info(f"Iniciando consulta para CNPJ: {cnpj}, Mês: {mes_numero}, Ano: {ano_numero}")
+        # Recupera o último NSU salvo 
+        ult_nsu = get_ultimo_nsu()
+        
+        logger.info(f"Iniciando consulta para CNPJ: {cnpj}. Continuando do NSU: {ult_nsu}")
+        
         consulta = SefazConsulta(CERTIFICADO_PATH, CERTIFICADO_SENHA)
-        resultado = consulta.consultar_nfe(cnpj, mes_numero, ano_numero)
+        
+        # Passa o 'ult_nsu' para a função da Sefaz
+        resultado = consulta.consultar_nfe(cnpj, mes_numero, ano_numero, ult_nsu=ult_nsu)
+
+        # Se a consulta deu certo e trouxe um novo NSU
+        if resultado is not None and resultado.get("sucesso"):
+             novo_nsu = resultado.get("ultimo_nsu_consultado")
+             if novo_nsu:
+                 save_ultimo_nsu(novo_nsu)
+                 logger.info(f"NSU atualizado para: {novo_nsu}")
+                 # Adiciona ao retorno para você ver no JSON
+                 resultado['nsu_atualizado'] = novo_nsu
+
+        resultado['total_geral'] = contar_notas_salvas()
+
         return jsonify(resultado)
         
     except Exception as e:
@@ -115,7 +164,7 @@ def consultar_nfe():
         # Retorna o erro real para o frontend para depuração
         return jsonify({'sucesso': False, 'erro': f'Erro Interno: {str(e)}'}), 500
 
-        # --- REALIZAR CONSULTA USANDO O MÓDULO REATORADO ---
+        # realizar a consulta usando a classe  
 
         # Valida se as variáveis globais do certificado foram carregadas
         if not CERTIFICADO_PATH or not CERTIFICADO_SENHA:
@@ -132,7 +181,7 @@ def consultar_nfe():
             logger.warning("A consulta à SEFAZ não retornou resultados ou falhou.")
             return jsonify({'sucesso': False, 'erro': 'Nenhum dado retornado pela SEFAZ ou falha na comunicação.'}), 404
 
-        # --- SALVAR RESULTADO E RETORNAR SUCESSO ---
+        # SALVAR RESULTADO E RETORNAR SUCESSO
         
         # Salvar resultado em arquivo para histórico
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -295,7 +344,7 @@ def status():
         'modulo_sefaz': True
     })
 
-# ROTA MOVIDA E CORRIGIDA
+# Rota para Nf-e
 @app.route('/nfe/download_zip', methods=['GET'])
 def download_zip():
     """
@@ -309,10 +358,10 @@ def download_zip():
         return jsonify({"erro": "Parâmetros 'cnpj', 'mes' e 'ano' são obrigatórios para download em lote."}), 400
 
     try:
-        # 1. Criar a instância da classe
+        # Criar a instância da classe
         consulta = SefazConsulta(CERTIFICADO_PATH, CERTIFICADO_SENHA)
         
-        # 2. Usar o método da instância (CORRIGIDO)
+        # Usar o método da instância (CORRIGIDO)
         resultado = consulta.consultar_nfe(cnpj, mes, ano)
         
         if resultado["sucesso"] and resultado["nfe_encontradas"]:
@@ -342,11 +391,10 @@ def download_zip():
         return jsonify({"erro": f"Erro interno ao gerar o arquivo ZIP: {e}"}), 500
 
 
-# ESTE BLOCO DEVE SER O ÚLTIMO NO ARQUIVO
+# Desenvolvimento 
 if __name__ == '__main__':
-    # Configurações para desenvolvimento
     app.run(
         host='0.0.0.0',
         port=5000,
-        debug=True  # Debug=True é ótimo para desenvolvimento
+        debug=True  
     )
