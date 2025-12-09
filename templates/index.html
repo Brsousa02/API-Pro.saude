@@ -179,13 +179,20 @@ document.getElementById('consultaForm').addEventListener('submit', function(e) {
         .then(data => {
             document.getElementById('loading').style.display = 'none';
 
-            if (data.sucesso) {
-                if (data.nfe_encontradas && data.nfe_encontradas.length > 0) {
-                    showResults(data.nfe_encontradas);
-                    showMessage(`Consulta realizada com sucesso! ${data.nfe_encontradas.length} NF-e encontrada(s).`, 'success');
-                } else {
-                    showMessage("Nenhuma NF-e encontrada para os critérios informados.", 'error');
-                }
+           if (data.sucesso) {
+            // 1. Pega o total que veio do Python (ou 0 se não vier nada)
+            let totalSalvo = data.total_geral || 0;
+
+            if (data.nfe_encontradas && data.nfe_encontradas.length > 0) {
+                showResults(data.nfe_encontradas);
+                // Mensagem de Sucesso: Mostra as novas + o total
+                showMessage(`Sucesso! ${data.nfe_encontradas.length} novas notas baixadas. (Total no PC: ${totalSalvo})`, 'success');
+            } else {
+                // MUDANÇA AQUI:
+                // Em vez de erro vermelho, usamos 'info' (azul) e mostramos o total salvo.
+                showMessage(`Tudo atualizado! Nenhuma nota nova na Sefaz. Você já tem ${totalSalvo} notas salvas.`, 'info');
+            }
+            
             } else {
                 showMessage(`Erro na consulta: ${data.erro}`, 'error');
             }
