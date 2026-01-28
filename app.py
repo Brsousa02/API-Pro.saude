@@ -1,400 +1,242 @@
-"""
-Aplicação Flask para consulta de NF-e na SEFAZ
-Interface web para o módulo sefaz_consulta
-"""
-
-from flask import Flask, render_template, request, jsonify, send_file
 import os
-import sys
-import json
-import logging
+import time
+import ssl
+import warnings
+import re
+import html
+import xml.etree.ElementTree as ET
 from datetime import datetime
-import tempfile
-import zipfile
-import io
-from dotenv import load_dotenv
+from lxml import etree
+import requests
+from requests import Session
+from requests_pkcs12 import Pkcs12Adapter
+from requests.adapters import HTTPAdapter
+from urllib3.poolmanager import PoolManager
+from urllib3.exceptions import InsecureRequestWarning
+from cryptography.hazmat.primitives.serialization import pkcs12
+from cryptography.hazmat.primitives import serialization
+from signxml import XMLSigner, methods
 
+warnings.simplefilter("ignore", InsecureRequestWarning)
 
-# CARREGAR VARIÁVEIS DE AMBIENTE
-load_dotenv()
+CAMINHO_CERTIFICADO = r"C:\Users\bruno.sousa\Documents\.env\Certificado.pfx"
+SENHA_DO_CERTIFICADO = "Abcd1234"
+CNPJ_EMPRESA = "06288135002124"
+AMBIENTE = "1"
 
-# CONFIGURAÇÕES GLOBAIS
-# O caminho
-CERTIFICADO_PATH = r"C:\Users\bruno.sousa\Documents\.env\Certificado.pfx"
-# A senha 
-CERTIFICADO_SENHA = "Abcd1234" 
+# Endpoint (Mesma URL)
+SOAP_URL = "https://www1.nfe.fazenda.gov.br/NFeRecepcaoEvento4/NFeRecepcaoEvento4.asmx"
+# Ação (Mesma URL)
+SOAP_ACTION = "http://www.portalfiscal.inf.br/nfe/wsdl/NFeRecepcaoEvento4/nfeRecepcaoEventoNF"
 
-DATA_DIR = os.path.join(os.path.dirname(__file__), 'data')
+NS_NFE = "http://www.portalfiscal.inf.br/nfe"
+NSMAP = {None: NS_NFE}
 
-# Garantir que o diretório de dados existe
-if not os.path.exists(DATA_DIR):
-    os.makedirs(DATA_DIR, exist_ok=True)
-
-    # Funções para gerenciar o último NSU
-NSU_FILE = os.path.join(DATA_DIR, "ultimo_nsu.txt")
-
-def get_ultimo_nsu():
-    """Lê o último NSU salvo, ou retorna '0' se não existir."""
-    if os.path.exists(NSU_FILE):
-        with open(NSU_FILE, 'r') as f:
-            return f.read().strip()
-    return "0"
-
-def save_ultimo_nsu(nsu):
-    """Salva o novo NSU no arquivo."""
-    with open(NSU_FILE, 'w') as f:
-        f.write(str(nsu))
-
-def contar_notas_salvas():
-    """Conta quantas notas já temos salvas na pasta data"""
-    total = 0
-    if os.path.exists(DATA_DIR):
-        for nome_arquivo in os.listdir(DATA_DIR):
-            if nome_arquivo.startswith("consulta_") and nome_arquivo.endswith(".json"):
-                caminho = os.path.join(DATA_DIR, nome_arquivo)
-                try:
-                    with open(caminho, 'r', encoding='utf-8') as f:
-                        dados = json.load(f)
-                        if 'nfe_encontradas' in dados:
-                            total += len(dados['nfe_encontradas'])
-                except:
-                    pass
-    return total
-
-# Adicionar o diretório do módulo ao path do sistema
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-try:
-    # Importar apenas a classe principal
-    from consulta_nfe_mes import SefazConsulta
-except ImportError as e:
-    print(f"Erro ao importar módulo sefaz_consulta: {e}")
-    print("Certifique-se de que o arquivo consulta_nfe_mes.py está no diretório correto")
-    sys.exit(1)
-
-# Iniciar o flask app
-app = Flask(__name__)
-print(" O SERVIDOR REINICIOU COM O CÓDIGO NOVO")
-app.config['SECRET_KEY'] = 'sua_chave_secreta_aqui' 
-
-# CONFIGURAÇÃO DO LOGGING 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
-
-
-# DEFINIÇÃO DAS ROTAS
-@app.route('/')
-def index():
-    """
-    Página principal da aplicação
-    """
-    logger.info("Acessando a página inicial.")
-    # Presume que tem um arquivo index.html
-    return render_template('index.html')
-
-
-@app.route('/api/consultar', methods=['POST'])
-def consultar_nfe():
-    """
-    API endpoint para consultar NF-e na SEFAZ
-    """
-    logger.info("Recebida requisição em /api/consultar")
-    
-
-    try:
-        
-        # Voltar a ler JSON
-        data = request.get_json()
-        if not data:
-            return jsonify({'sucesso': False, 'erro': 'Dados não fornecidos (JSON vazio)'}), 400
-
-        # Ler os dados do JSON 
-        cnpj = data.get('cnpj')
-        mes_str = data.get('mes')
-        ano_str = data.get('ano')
-
-        if not cnpj:
-            return jsonify({'sucesso': False, 'erro': 'CNPJ/CPF é obrigatório'}), 400
-        
-        cnpj = cnpj.strip() # Limpa o CNPJ
-
-        mes_numero = None
-        # A opção "Todos os meses" envia value=""
-        if mes_str and mes_str.isdigit():
-            mes_numero = int(mes_str)
-
-        ano_numero = None
-        if ano_str and ano_str.isdigit():
-            ano_numero = int(ano_str)
-        # A opção "Todos os anos" envia value=""
-        if ano_str == "":
-            ano_numero = None # Permite busca sem ano
-
-        # Recupera o último NSU salvo 
-        ult_nsu = get_ultimo_nsu()
-        
-        logger.info(f"Iniciando consulta para CNPJ: {cnpj}. Continuando do NSU: {ult_nsu}")
-        
-        consulta = SefazConsulta(CERTIFICADO_PATH, CERTIFICADO_SENHA)
-        
-        # Passa o 'ult_nsu' para a função da Sefaz
-        resultado = consulta.consultar_nfe(cnpj, mes_numero, ano_numero, ult_nsu=ult_nsu)
-
-        # Se a consulta deu certo e trouxe um novo NSU
-        if resultado is not None and resultado.get("sucesso"):
-             novo_nsu = resultado.get("ultimo_nsu_consultado")
-             if novo_nsu:
-                 save_ultimo_nsu(novo_nsu)
-                 logger.info(f"NSU atualizado para: {novo_nsu}")
-                 # Adiciona ao retorno para você ver no JSON
-                 resultado['nsu_atualizado'] = novo_nsu
-
-        resultado['total_geral'] = contar_notas_salvas()
-
-        return jsonify(resultado)
-        
-    except Exception as e:
-        logger.error(f"Erro na consulta: {e}")
-        return jsonify({'sucesso': False, 'erro': f'Erro Interno: {str(e)}'}), 500
-
-    except Exception as e:
-        logger.error(f"Erro na consulta: {e}")
-        # Retorna o erro real para o frontend para depuração
-        return jsonify({'sucesso': False, 'erro': f'Erro Interno: {str(e)}'}), 500
-
-        # realizar a consulta usando a classe  
-
-        # Valida se as variáveis globais do certificado foram carregadas
-        if not CERTIFICADO_PATH or not CERTIFICADO_SENHA:
-            logger.error("Credenciais do certificado (CERTIFICADO_PATH/CERTIFICADO_SENHA) não estão definidas no app.")
-            return jsonify({'sucesso': False, 'erro': 'Erro de configuração no servidor.'}), 500
-
-        # Cria a instância passando as variáveis
-        consulta = SefazConsulta(CERTIFICADO_PATH, CERTIFICADO_SENHA)
-        
-        # Chama o método da instância
-        resultado = consulta.consultar_nfe(cnpj, mes_numero, ano_numero)
-
-        if resultado is None:
-            logger.warning("A consulta à SEFAZ não retornou resultados ou falhou.")
-            return jsonify({'sucesso': False, 'erro': 'Nenhum dado retornado pela SEFAZ ou falha na comunicação.'}), 404
-
-        # SALVAR RESULTADO E RETORNAR SUCESSO
-        
-        # Salvar resultado em arquivo para histórico
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        resultado_file = os.path.join(DATA_DIR, f"consulta_{timestamp}.json")
-        
-        # Adiciona o timestamp ao resultado para uso no download
-        resultado['timestamp_consulta'] = timestamp
-        
-        with open(resultado_file, 'w', encoding='utf-8') as f:
-            json.dump(resultado, f, ensure_ascii=False, indent=2, default=str)
-
-        logger.info(f"Consulta concluída. Sucesso. Resultado salvo em {resultado_file}")
-        
-        # Retorna o resultado da consulta para o frontend
-        return jsonify(resultado)
-
-    except FileNotFoundError as e:
-        logger.error(f"Erro de Arquivo Não Encontrado: {e}", exc_info=True)
-        return jsonify({'sucesso': False, 'erro': f'Erro de Configuração: Arquivo não encontrado. Verifique o caminho do certificado. Detalhe: {e}'}), 500
-    except Exception as e:
-        logger.error(f"Erro na consulta: {e}", exc_info=True) # exc_info=True loga o traceback completo
-        return jsonify({
-            'sucesso': False,
-            'erro': f'Erro Interno: {str(e)}'
-        }), 500
-
-@app.route('/api/download_xml/<timestamp>/<chave_nfe>')
-def download_xml(timestamp, chave_nfe):
-    """
-    Download de XML específico de uma NF-e de uma consulta específica
-    (Rota otimizada para não varrer todos os arquivos)
-    """
-    try:
-        resultado_file = os.path.join(DATA_DIR, f"consulta_{timestamp}.json")
-        
-        if not os.path.exists(resultado_file):
-            return jsonify({'erro': 'Arquivo de consulta não encontrado'}), 404
-            
-        with open(resultado_file, 'r', encoding='utf-8') as f:
-            resultado = json.load(f)
-        
-        if resultado.get('sucesso'):
-            for nfe in resultado.get('nfe_encontradas', []):
-                if nfe.get('chave_nfe') == chave_nfe:
-                    # Criar arquivo temporário com o XML
-                    temp_file = tempfile.NamedTemporaryFile(
-                        mode='w',
-                        suffix='.xml',
-                        delete=False,
-                        encoding='utf-8'
-                    )
-                    temp_file.write(nfe['xml_completo'])
-                    temp_file.close()
-                    
-                    return send_file(
-                        temp_file.name,
-                        as_attachment=True,
-                        download_name=f"NFe_{chave_nfe}.xml",
-                        mimetype='application/xml'
-                    )
-        
-        return jsonify({'erro': 'XML não encontrado nesta consulta'}), 404
-        
-    except Exception as e:
-        logger.error(f"Erro no download: {e}")
-        return jsonify({'erro': f'Erro interno: {str(e)}'}), 500
-
-
-@app.route('/api/download_all/<timestamp>')
-def download_all_xml(timestamp):
-    """
-    Download de todos os XMLs de uma consulta específica
-    """
-    try:
-        resultado_file = os.path.join(DATA_DIR, f"consulta_{timestamp}.json")
-        
-        if not os.path.exists(resultado_file):
-            return jsonify({'erro': 'Consulta não encontrada'}), 404
-        
-        with open(resultado_file, 'r', encoding='utf-8') as f:
-            resultado = json.load(f)
-        
-        if not resultado.get('sucesso') or not resultado.get('nfe_encontradas'):
-            return jsonify({'erro': 'Nenhuma NF-e encontrada nesta consulta'}), 404
-        
-        # Criar arquivo ZIP em memória
-        memory_file = io.BytesIO()
-        
-        with zipfile.ZipFile(memory_file, 'w', zipfile.ZIP_DEFLATED) as zipf:
-            for nfe in resultado['nfe_encontradas']:
-                chave = nfe.get('chave_nfe', 'sem_chave')
-                xml_content = nfe.get('xml_completo', '')
-                
-                if xml_content:
-                    zipf.writestr(f"NFe_{chave}.xml", xml_content.encode('utf-8'))
-        
-        memory_file.seek(0)
-        return send_file(
-            memory_file,
-            as_attachment=True,
-            download_name=f"NFes_{timestamp}.zip",
-            mimetype='application/zip'
+class Tls12Adapter(HTTPAdapter):
+    def init_poolmanager(self, connections, maxsize, block=False):
+        self.poolmanager = PoolManager(
+            num_pools=connections,
+            maxsize=maxsize,
+            block=block,
+            ssl_version=ssl.PROTOCOL_TLSv1_2
         )
-        
-    except Exception as e:
-        logger.error(f"Erro no download em lote: {e}")
-        return jsonify({'erro': f'Erro interno: {str(e)}'}), 500
 
+def criar_xml_manifestacao(chave: str, sequencia: int = 1) -> etree._Element:
+    id_evento = f"ID210210{chave}0{sequencia:02d}"
+    data_hora = datetime.now().strftime("%Y-%m-%dT%H:%M:%S-03:00")
 
-@app.route('/api/historico')
-def historico_consultas():
-    """
-    Retorna histórico de consultas realizadas
-    """
-    try:
-        historico = []
-        
-        for filename in sorted(os.listdir(DATA_DIR), reverse=True):
-            if filename.startswith('consulta_') and filename.endswith('.json'):
-                filepath = os.path.join(DATA_DIR, filename)
-                
-                try:
-                    with open(filepath, 'r', encoding='utf-8') as f:
-                        resultado = json.load(f)
-                    
-                    timestamp = filename.replace('consulta_', '').replace('.json', '')
-                    
-                    historico.append({
-                        'timestamp': timestamp,
-                        'data_consulta': datetime.strptime(timestamp, "%Y%m%d_%H%M%S").strftime("%d/%m/%Y %H:%M:%S"),
-                        'cnpj': resultado.get('cnpj_consultado', 'N/A'),
-                        'sucesso': resultado.get('sucesso', False),
-                        'total_nfe': len(resultado.get('nfe_encontradas', [])),
-                        'erro': resultado.get('erro', '')
-                    })
-                    
-                except Exception as e:
-                    logger.warning(f"Erro ao processar arquivo {filename}: {e}")
-                    continue
-        
-        return jsonify({
-            'sucesso': True,
-            'historico': historico[:50]  # Limitar a 50 registros mais recentes
-        })
-        
-    except Exception as e:
-        logger.error(f"Erro ao obter histórico: {e}")
-        return jsonify({'sucesso': False, 'erro': f'Erro interno: {str(e)}'}), 500
+    env_evento = etree.Element(f"{{{NS_NFE}}}envEvento", versao="1.00", nsmap=NSMAP)
+    etree.SubElement(env_evento, f"{{{NS_NFE}}}idLote").text = "1"
 
+    evento = etree.SubElement(env_evento, f"{{{NS_NFE}}}evento", versao="1.00")
 
-@app.route('/api/status')
-def status():
-    """
-    Endpoint para verificar status da aplicação
-    """
-    return jsonify({
-        'status': 'online',
-        'timestamp': datetime.now().isoformat(),
-        'certificado_configurado': os.path.exists(CERTIFICADO_PATH),
-        'modulo_sefaz': True
-    })
+    inf_evento = etree.SubElement(evento, f"{{{NS_NFE}}}infEvento", Id=id_evento)
+    etree.SubElement(inf_evento, f"{{{NS_NFE}}}cOrgao").text = "91"
+    etree.SubElement(inf_evento, f"{{{NS_NFE}}}tpAmb").text = AMBIENTE
+    etree.SubElement(inf_evento, f"{{{NS_NFE}}}CNPJ").text = CNPJ_EMPRESA
+    etree.SubElement(inf_evento, f"{{{NS_NFE}}}chNFe").text = chave
+    etree.SubElement(inf_evento, f"{{{NS_NFE}}}dhEvento").text = data_hora
+    etree.SubElement(inf_evento, f"{{{NS_NFE}}}tpEvento").text = "210210"
+    etree.SubElement(inf_evento, f"{{{NS_NFE}}}nSeqEvento").text = str(sequencia)
+    etree.SubElement(inf_evento, f"{{{NS_NFE}}}verEvento").text = "1.00"
 
-# Rota para Nf-e
-@app.route('/nfe/download_zip', methods=['GET'])
-def download_zip():
-    """
-    Realiza uma nova consulta e baixa um ZIP com os resultados.
-    """
-    cnpj = request.args.get('cnpj')
-    mes = request.args.get('mes', type=int)
-    ano = request.args.get('ano', type=int)
+    det = etree.SubElement(inf_evento, f"{{{NS_NFE}}}detEvento", versao="1.00")
+    etree.SubElement(det, f"{{{NS_NFE}}}descEvento").text = "Ciencia da Operacao"
 
-    if not cnpj or not mes or not ano:
-        return jsonify({"erro": "Parâmetros 'cnpj', 'mes' e 'ano' são obrigatórios para download em lote."}), 400
+    return env_evento
 
-    try:
-        # Criar a instância da classe
-        consulta = SefazConsulta(CERTIFICADO_PATH, CERTIFICADO_SENHA)
-        
-        # Usar o método da instância (CORRIGIDO)
-        resultado = consulta.consultar_nfe(cnpj, mes, ano)
-        
-        if resultado["sucesso"] and resultado["nfe_encontradas"]:
-            memory_file = io.BytesIO()
-            with zipfile.ZipFile(memory_file, 'w', zipfile.ZIP_DEFLATED) as zf:
-                for nfe_data in resultado["nfe_encontradas"]:
-                    xml_content = nfe_data.get("xml_completo")
-                    chave_nfe = nfe_data.get("chave_nfe")
-                    if xml_content and chave_nfe:
-                        zf.writestr(f"NFe_{chave_nfe}.xml", xml_content.encode('utf-8'))
-            
-            memory_file.seek(0)
-            return send_file(
-                memory_file, 
-                mimetype='application/zip', 
-                as_attachment=True, 
-                download_name=f"NFes_{cnpj}_{mes}_{ano}.zip"
-            )
-
-        elif resultado["sucesso"] and not resultado["nfe_encontradas"]:
-            return jsonify({"mensagem": "Nenhuma NF-e encontrada para os critérios informados."}), 404
-        else:
-            return jsonify({"erro": resultado.get("erro", "Erro desconhecido na consulta")}), 500
-            
-    except Exception as e:
-        logging.error(f"Erro ao gerar ZIP de NF-e: {e}")
-        return jsonify({"erro": f"Erro interno ao gerar o arquivo ZIP: {e}"}), 500
-
-
-# Desenvolvimento 
-if __name__ == '__main__':
-    app.run(
-        host='0.0.0.0',
-        port=5000,
-        debug=True  
+def assinar_env_evento(xml_root: etree._Element, private_key, cert) -> etree._Element:
+    inf_evento = xml_root.find(f".//{{{NS_NFE}}}infEvento")
+    
+    signer = XMLSigner(
+        method=methods.enveloped,
+        signature_algorithm="rsa-sha1",
+        digest_algorithm="sha1",
+        c14n_algorithm="http://www.w3.org/TR/2001/REC-xml-c14n-20010315",
     )
+
+    signed_inf = signer.sign(
+        inf_evento,
+        key=private_key,
+        cert=cert.public_bytes(serialization.Encoding.PEM),
+        reference_uri="#" + inf_evento.get("Id"),
+    )
+
+    evento_node = xml_root.find(f".//{{{NS_NFE}}}evento")
+    evento_node.remove(inf_evento)
+    evento_node.append(signed_inf)
+    
+    # Remove assinatura duplicada se houver
+    ns_sig = "{http://www.w3.org/2000/09/xmldsig#}"
+    signature_node = signed_inf.find(f".//{ns_sig}Signature") or signed_inf.find(".//Signature")
+    if signature_node is not None:
+         signed_inf.remove(signature_node)
+         evento_node.append(signature_node)
+
+    return xml_root
+
+def enviar_soap_envio_evento(xml_env_evento_str: str) -> requests.Response:
+    # 1. FAXINA DO XML (Remove prefixos ns0, ds, xsi)
+    xml_clean = re.sub(r' xmlns:ns\d+="[^"]+"', '', xml_env_evento_str)
+    xml_clean = re.sub(r' xmlns:ds="[^"]+"', '', xml_clean)
+    xml_clean = re.sub(r' xmlns:xsi="[^"]+"', '', xml_clean)
+    xml_clean = re.sub(r'<(/?)(ns\d+|ds|xsi):', r'<\1', xml_clean)
+    xml_clean = re.sub(r'^<\?xml[^>]*\?>', '', xml_clean).strip()
+
+    # 2. Garante namespaces oficiais
+    if 'xmlns="http://www.portalfiscal.inf.br/nfe"' not in xml_clean:
+         xml_clean = xml_clean.replace('<envEvento', '<envEvento xmlns="http://www.portalfiscal.inf.br/nfe" ')
+    if 'xmlns="http://www.w3.org/2000/09/xmldsig#"' not in xml_clean:
+         xml_clean = xml_clean.replace('<Signature', '<Signature xmlns="http://www.w3.org/2000/09/xmldsig#" ')
+    
+    xml_clean = xml_clean.replace("http://www.w3.org/2006/12/xml-c14n11", "http://www.w3.org/TR/2001/REC-xml-c14n-20010315")
+
+    # 3. Monta Envelope SOAP 1.1 (MUDANÇA AQUI)
+    # Note que usamos 'soapenv' e a estrutura clássica
+    soap_envelope = f"""<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:nfe="http://www.portalfiscal.inf.br/nfe/wsdl/NFeRecepcaoEvento4">
+   <soapenv:Header/>
+   <soapenv:Body>
+      <nfe:nfeDadosMsg>
+        {xml_clean}
+      </nfe:nfeDadosMsg>
+   </soapenv:Body>
+</soapenv:Envelope>"""
+
+    # 4. Cabeçalhos SOAP 1.1 (Action Separada -> Evita Erro 400/500)
+    headers = {
+        "Content-Type": "text/xml; charset=utf-8",
+        "SOAPAction": SOAP_ACTION,
+        "User-Agent": "Mozilla/5.0",
+    }
+
+    s = Session()
+    s.verify = False
+    s.mount("https://", Tls12Adapter())
+    s.mount("https://", Pkcs12Adapter(pkcs12_filename=CAMINHO_CERTIFICADO, pkcs12_password=SENHA_DO_CERTIFICADO))
+
+    try:
+        # Envia como bytes para garantir encoding correto
+        response = s.post(SOAP_URL, data=soap_envelope.encode("utf-8"), headers=headers, timeout=60)
+        return response
+    except Exception as e:
+        print(f"ERRO DE CONEXÃO: {e}")
+        return None
+
+def ler_resposta(response_content):
+    if not response_content: return
+    
+    try:
+        # Tenta decodificar a resposta
+        xml_resp = response_content.decode('utf-8', errors='ignore')
+        
+        # Remove prefixos de resposta para facilitar o parser
+        xml_resp = re.sub(r'<(/?)(soap|soapenv|nfe):', r'<\1', xml_resp)
+        xml_resp = xml_resp.replace('xmlns:soap="http://www.w3.org/2003/05/soap-envelope"', '')
+        xml_resp = xml_resp.replace('xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"', '')
+        
+        root = etree.fromstring(xml_resp.encode('utf-8'))
+        
+        # Busca Fault (Erro SOAP)
+        fault = root.find(".//Fault")
+        if fault is not None:
+            reason = fault.find(".//faultstring")
+            text = reason.text if reason is not None else "Erro desconhecido"
+            print(f"ERRO SOAP: {text}")
+            return
+
+        # Busca Retorno
+        ret_env = root.find(".//retEnvEvento")
+        
+        if ret_env is not None:
+            c_stat = ret_env.find(".//cStat")
+            x_motivo = ret_env.find(".//xMotivo")
+            
+            c_stat_text = c_stat.text if c_stat is not None else "?"
+            x_motivo_text = x_motivo.text if x_motivo is not None else "?"
+            
+            if c_stat_text == '128':
+                inf_evento = ret_env.find(".//infEvento")
+                if inf_evento is not None:
+                    c_stat_evt = inf_evento.find("cStat").text
+                    x_motivo_evt = inf_evento.find("xMotivo").text
+                    print(f"RESULTADO: {c_stat_evt} - {x_motivo_evt}")
+                else:
+                    print(f"LOTE 128 (Processado).")
+            else:
+                print(f"STATUS LOTE: {c_stat_text} - {x_motivo_text}")
+        else:
+            print("Não encontrei tag <retEnvEvento>.")
+            print(f"RAW: {xml_resp[:600]}")
+
+    except Exception as e:
+        print(f"Erro ao ler XML: {e}")
+
+def enviar_manifestacao(chave: str):
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] Processando: {chave} ...", end=" ")
+
+    try:
+        with open(CAMINHO_CERTIFICADO, "rb") as f: pfx_bytes = f.read()
+        private_key, cert, _ = pkcs12.load_key_and_certificates(pfx_bytes, SENHA_DO_CERTIFICADO.encode())
+
+        xml_root = criar_xml_manifestacao(chave)
+        xml_root = assinar_env_evento(xml_root, private_key, cert)
+        
+        xml_str = etree.tostring(xml_root, encoding="unicode", xml_declaration=False)
+
+        print("--> Enviando...", end=" ")
+        
+        response = enviar_soap_envio_evento(xml_str)
+        
+        if response is not None:
+            if response.status_code == 200:
+                ler_resposta(response.content)
+            else:
+                print(f"ERRO HTTP: {response.status_code}")
+                # Imprime o corpo do erro para sabermos o que houve
+                print(f"BODY: {response.text[:1000]}") 
+        else:
+            print("Sem resposta (Conexão falhou)")
+
+    except Exception as e:
+        print(f"ERRO GERAL: {e}")
+
+def iniciar():
+    arquivo_lista = "chaves_para_manifestar.txt"
+    if not os.path.exists(arquivo_lista):
+        with open(arquivo_lista, "w") as f: f.write("")
+        return
+
+    with open(arquivo_lista, "r") as f:
+        chaves = [linha.strip() for linha in f if len(linha.strip()) == 44]
+
+    print(f"--- Iniciando {len(chaves)} notas (SOAP 1.1) ---")
+
+    try:
+        for chave in chaves:
+            enviar_manifestacao(chave)
+            time.sleep(1)
+    except KeyboardInterrupt:
+        print("\nInterrompido pelo usuário.")
+
+if __name__ == "__main__":
+    iniciar()
