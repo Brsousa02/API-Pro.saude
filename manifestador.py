@@ -14,7 +14,7 @@ from signxml import XMLSigner, methods
 from cryptography.hazmat.primitives.serialization import pkcs12
 from cryptography.hazmat.primitives import serialization
 
-# --- CONFIGURAÇÕES ---
+# Configurações 
 warnings.simplefilter("ignore", InsecureRequestWarning)
 
 CAMINHO_CERTIFICADO = r"C:\Users\bruno.sousa\Documents\.env\Certificado.pfx"
@@ -22,14 +22,14 @@ SENHA_DO_CERTIFICADO = "Abcd1234"
 CNPJ_EMPRESA = "06288135002124"
 AMBIENTE = "1" 
 
-# ENDPOINTS
+# Endpoint da sefaz 
 SOAP_URL = "https://www1.nfe.fazenda.gov.br/NFeRecepcaoEvento4/NFeRecepcaoEvento4.asmx"
 SOAP_ACTION = "http://www.portalfiscal.inf.br/nfe/wsdl/NFeRecepcaoEvento4/nfeRecepcaoEvento"
 
 NS_NFE = "http://www.portalfiscal.inf.br/nfe"
 NS_SIG = "http://www.w3.org/2000/09/xmldsig#"
 
-# --- 1. CONEXÃO ---
+# Conexão 
 class Tls12Adapter(HTTPAdapter):
     def init_poolmanager(self, connections, maxsize, block=False):
         self.poolmanager = PoolManager(
@@ -48,42 +48,24 @@ def get_session():
     session.mount("https://", pkcs12_adapter)
     return session
 
-# --- 2. GERAÇÃO XML ---
-def criar_xml_manifestacao(chave: str, sequencia: int = 1) -> etree._Element:
-    nsmap = {None: NS_NFE}
+# Gera assinatura 
+def gerar_envelope_completo(chave: str, sequencia: int = 1):
     chave = "".join(filter(str.isdigit, chave))
     cnpj = "".join(filter(str.isdigit, CNPJ_EMPRESA))
     
     id_evento = f"ID210210{chave}0{sequencia:02d}"
     data_hora = datetime.now().strftime("%Y-%m-%dT%H:%M:%S-03:00")
 
-    env_evento = etree.Element(f"{{{NS_NFE}}}envEvento", versao="1.00", nsmap=nsmap)
-    etree.SubElement(env_evento, f"{{{NS_NFE}}}idLote").text = "1"
-    evento = etree.SubElement(env_evento, f"{{{NS_NFE}}}evento", versao="1.00")
-    inf_evento = etree.SubElement(evento, f"{{{NS_NFE}}}infEvento", Id=id_evento)
+    # Texto limpo 
+    inf_evento_str = f"""<infEvento xmlns="{NS_NFE}" Id="{id_evento}"><cOrgao>91</cOrgao><tpAmb>{AMBIENTE}</tpAmb><CNPJ>{cnpj}</CNPJ><chNFe>{chave}</chNFe><dhEvento>{data_hora}</dhEvento><tpEvento>210210</tpEvento><nSeqEvento>{sequencia}</nSeqEvento><verEvento>1.00</verEvento><detEvento versao="1.00"><descEvento>Ciencia da Operacao</descEvento></detEvento></infEvento>"""
     
-    etree.SubElement(inf_evento, f"{{{NS_NFE}}}cOrgao").text = "91"
-    etree.SubElement(inf_evento, f"{{{NS_NFE}}}tpAmb").text = AMBIENTE
-    etree.SubElement(inf_evento, f"{{{NS_NFE}}}CNPJ").text = cnpj
-    etree.SubElement(inf_evento, f"{{{NS_NFE}}}chNFe").text = chave
-    etree.SubElement(inf_evento, f"{{{NS_NFE}}}dhEvento").text = data_hora
-    etree.SubElement(inf_evento, f"{{{NS_NFE}}}tpEvento").text = "210210"
-    etree.SubElement(inf_evento, f"{{{NS_NFE}}}nSeqEvento").text = str(sequencia)
-    etree.SubElement(inf_evento, f"{{{NS_NFE}}}verEvento").text = "1.00"
+    # Assinatura 
+    root_to_sign = etree.fromstring(inf_evento_str)
 
-    det = etree.SubElement(inf_evento, f"{{{NS_NFE}}}detEvento", versao="1.00")
-    etree.SubElement(det, f"{{{NS_NFE}}}descEvento").text = "Ciencia da Operacao"
-
-    return env_evento
-
-# --- 3. ASSINATURA ---
-def assinar_env_evento(xml_root: etree._Element) -> etree._Element:
     with open(CAMINHO_CERTIFICADO, "rb") as f:
         pfx_bytes = f.read()
     private_key, cert, _ = pkcs12.load_key_and_certificates(pfx_bytes, SENHA_DO_CERTIFICADO.encode())
 
-    inf_evento = xml_root.find(f".//{{{NS_NFE}}}infEvento")
-    
     signer = XMLSigner(
         method=methods.enveloped,
         signature_algorithm="rsa-sha1",
@@ -91,76 +73,64 @@ def assinar_env_evento(xml_root: etree._Element) -> etree._Element:
         c14n_algorithm="http://www.w3.org/TR/2001/REC-xml-c14n-20010315"
     )
 
-    signed_inf = signer.sign(
-        inf_evento,
+    signed_node = signer.sign(
+        root_to_sign,
         key=private_key,
         cert=cert.public_bytes(serialization.Encoding.PEM),
-        reference_uri="#" + inf_evento.get("Id")
-    )
-
-    evento = xml_root.find(f".//{{{NS_NFE}}}evento")
-    evento.remove(inf_evento)
-    evento.append(signed_inf)
-    
-    return xml_root
-
-# --- 4. TRATAMENTO FINAL (A CORREÇÃO DO SCHEMA) ---
-def finalizar_xml_string(xml_root: etree._Element) -> str:
-    # Transforma em string
-    xml_str = etree.tostring(xml_root, encoding="unicode", xml_declaration=False)
-    
-    # 1. Remove definições de namespace poluídas (xmlns:ns0, xmlns:ds)
-    xml_str = re.sub(r'\sxmlns:ns\d+="[^"]+"', '', xml_str)
-    xml_str = re.sub(r'\sxmlns:ds="[^"]+"', '', xml_str)
-    
-    # 2. Remove os prefixos das tags (ns0: e ds:)
-    xml_str = re.sub(r'<(/?)(ns\d+|ds):', r'<\1', xml_str)
-    
-    # 3. CORREÇÃO DA ASSINATURA
-    # Se a assinatura ficou sem xmlns, adiciona
-    if '<Signature' in xml_str and 'xmlns="http://www.w3.org/2000/09/xmldsig#"' not in xml_str:
-        xml_str = xml_str.replace('<Signature', f'<Signature xmlns="{NS_SIG}"')
-
-    # 4. CORREÇÃO DA RAIZ (Onde deu o erro de Schema)
-    # Procura a tag de abertura <envEvento...> e substitui pela correta e completa
-    # Usamos regex para pegar qualquer variação que esteja lá
-    xml_str = re.sub(
-        r'<envEvento.*?>', 
-        f'<envEvento xmlns="{NS_NFE}" versao="1.00">', 
-        xml_str, 
-        count=1
+        reference_uri="#" + id_evento
     )
     
-    return xml_str
+    # Extrair a tag Signature 
+    signature_element = signed_node.find(f".//{{{NS_SIG}}}Signature")
+    
+    if signature_element is None:
+        raise ValueError("Erro fatal: A biblioteca não gerou a tag Signature.")
 
-# --- 5. ENVIO ---
+    # Serializa apenas para o texto da assinatura 
+    signature_str = etree.tostring(signature_element, encoding="unicode")
+    signature_str = re.sub(r'</?(\w+:)?Signature', lambda m: m.group(0).replace(m.group(1) or '', ''), signature_str)
+    
+    # Remove xmlns residuais
+    signature_str = re.sub(r'\sxmlns:\w+="[^"]+"', '', signature_str)
+    
+    # Garante o xmlns correto na raiz da assinatura
+    if 'xmlns="http://www.w3.org/2000/09/xmldsig#"' not in signature_str:
+        signature_str = signature_str.replace('<Signature', f'<Signature xmlns="{NS_SIG}"', 1)
+
+    # Montagem do envelope final
+    inf_evento_limpo = inf_evento_str.replace(f' xmlns="{NS_NFE}"', '')
+
+    envelope = f"""<envEvento xmlns="{NS_NFE}" versao="1.00"><idLote>1</idLote><evento xmlns="{NS_NFE}" versao="1.00">{inf_evento_limpo}{signature_str}</evento></envEvento>"""
+    
+    # Remove espaços entre tags
+    envelope = re.sub(r'>\s+<', '><', envelope)
+    
+    return envelope
+
+# Envio e processamento 
 def enviar_manifestacao(chave: str):
     print(f"[{datetime.now().strftime('%H:%M:%S')}] Nota: {chave} ...", end=" ")
     
+     #Gerador do XML 
     try:
-        # Gera e Assina
-        xml_root = criar_xml_manifestacao(chave)
-        xml_root = assinar_env_evento(xml_root)
-        
-        # Finaliza string (Limpa prefixos e Força Schema)
-        xml_str = finalizar_xml_string(xml_root)
+        xml_str = gerar_envelope_completo(chave)
 
         # Envelope SOAP
-        soap_envelope = f"""<?xml version="1.0" encoding="utf-8"?>
-<soap12:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:soap12="http://www.w3.org/2003/05/soap-envelope">
-  <soap12:Body>
-    <nfeDadosMsg xmlns="http://www.portalfiscal.inf.br/nfe/wsdl/NFeRecepcaoEvento4">
-{xml_str}
-    </nfeDadosMsg>
-  </soap12:Body>
-</soap12:Envelope>"""
+        soap_envelope = '<?xml version="1.0" encoding="utf-8"?>'
+        soap_envelope += '<soap12:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:soap12="http://www.w3.org/2003/05/soap-envelope">'
+        soap_envelope += '<soap12:Body>'
+        soap_envelope += '<nfeDadosMsg xmlns="http://www.portalfiscal.inf.br/nfe/wsdl/NFeRecepcaoEvento4">'
+        soap_envelope += xml_str
+        soap_envelope += '</nfeDadosMsg>'
+        soap_envelope += '</soap12:Body>'
+        soap_envelope += '</soap12:Envelope>'
 
         headers = {
             "Content-Type": f'application/soap+xml; charset=utf-8; action="{SOAP_ACTION}"',
             "User-Agent": "Mozilla/5.0"
         }
 
-        # Conexão
+        # Envio
         session = get_session()
         resp = session.post(SOAP_URL, data=soap_envelope.encode("utf-8"), headers=headers, timeout=30)
 
@@ -192,7 +162,7 @@ def enviar_manifestacao(chave: str):
         print(f"ERRO GERAL: {e}")
 
 def iniciar():
-    print(">>> INICIANDO (SCHEMA FIX FORCE) <<<")
+    print(">>> INICIANDO (FRANKENSTEIN 2.0 - CORRIGIDO) <<<")
     arquivo_chaves = "chaves_para_manifestar.txt"
     if not os.path.exists(arquivo_chaves):
         with open(arquivo_chaves, "w") as f: f.write("")
