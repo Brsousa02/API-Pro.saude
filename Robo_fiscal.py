@@ -205,37 +205,49 @@ class SefazAutomacao:
 
         # Processamento de documentos baixados
     def _processar_documentos(self, docs):
-        pasta_destino = "Notas_Baixadas"
-        if not os.path.exists(pasta_destino): os.makedirs(pasta_destino)
-
+        pasta_raiz = "Notas_Baixadas"
+        
         for doc in docs:
             try:
                 ns_doc = doc.get("NSU")
                 schema = doc.get("schema")
-                conteudo_b64 = doc.text
-                
-                xml_bytes = gzip.decompress(base64.b64decode(conteudo_b64))
+                conteudo_base64 = doc.text
+
+                # Decodificação do XML
+                xml_bytes = gzip.decompress(base64.b64decode(conteudo_base64))
                 xml_str = xml_bytes.decode('utf-8')
                 root = etree.fromstring(xml_bytes)
 
+                #Tentar pegar a Chave de Acesso
                 chave = "Desconhecida"
+                tag_chave = root.xpath("//*[local-name()='chNFe']")
+                if tag_chave:
+                    chave = tag_chave[0].text
+                tag_cnpj = root.xpath("//*[local-name()='dest']/*[local-name()='CNPJ']")
+                cnpj_pasta = tag_cnpj[0].text if tag_cnpj else "Sem_CNPJ"
+                tag_data = root.xpath("//*[local-name()='ide']/*[local-name()='dhEmi']")
+                if tag_data:
+                    data_str = tag_data[0].text  
+                    ano = data_str[:4]
+                    mes = data_str[5:7]
+                else:
+                    from datetime import datetime
+                    agora = datetime.now()
+                    ano = agora.strftime('%Y')
+                    mes = agora.strftime('%m')
+                    
+                caminho_final = os.path.join(pasta_raiz, cnpj_pasta, ano, mes)
+                os.makedirs(caminho_final, exist_ok=True)
+
+                # Salvar o arquivo XML
+                nome_arquivo = os.path.join(caminho_final, f"{chave}.xml")
+                with open(nome_arquivo, "w", encoding="utf-8") as f:
+                    f.write(xml_str)
+                
+                self.logger.info(f"XML BAIXADO: {chave} em {caminho_final}")
                 
                 if "resNFe" in schema:
-                    chave_elem = root.find(f".//{{{NS_NFE}}}chNFe")
-                    if chave_elem is not None:
-                        chave = chave_elem.text
-                        self.logger.info(f"RESUMO: {chave} - NSU: {ns_doc}")
-                        self.manifestar_ciencia(chave)
-                
-                elif "procNFe" in schema:
-                    inf_prot = root.find(f".//{{{NS_NFE}}}infProt")
-                    if inf_prot is not None:
-                        chave = inf_prot.find(f".//{{{NS_NFE}}}chNFe").text
-                        
-                    nome_arquivo = os.path.join(pasta_destino, f"{chave}.xml")
-                    with open(nome_arquivo, "w", encoding="utf-8") as f:
-                        f.write(xml_str)
-                    self.logger.info(f"XML BAIXADO: {chave}")
+                    self.manifestar_ciencia(chave)
 
             except Exception as e:
                 self.logger.error(f"Erro doc NSU {ns_doc}: {e}")
