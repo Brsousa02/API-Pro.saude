@@ -21,20 +21,22 @@ from cryptography.hazmat.primitives import serialization
 
 warnings.simplefilter('ignore', InsecureRequestWarning)
 
-# Endpoint da sefaz 
 URL_DISTRIBUICAO = "https://www1.nfe.fazenda.gov.br/NFeDistribuicaoDFe/NFeDistribuicaoDFe.asmx"
 URL_EVENTO = "https://www1.nfe.fazenda.gov.br/NFeRecepcaoEvento4/NFeRecepcaoEvento4.asmx"
 WSDL_DISTRIBUICAO = URL_DISTRIBUICAO + "?wsdl"
-
 NS_NFE = "http://www.portalfiscal.inf.br/nfe"
 NS_SIG = "http://www.w3.org/2000/09/xmldsig#"
 
+# Configurações de caminho 
+DIRETORIO_ATUAL = os.path.dirname(os.path.abspath(__file__))
+CAMINHO_CERTIFICADO = r"C:\Users\bruno.sousa\Documents\.env\Certificado.pfx"
+SENHA_CERTIFICADO = "Abcd1234" 
+ARQUIVO_NSU = os.path.join(DIRETORIO_ATUAL, "ultimo_nsu.txt")
+ARQUIVO_LOG = os.path.join(DIRETORIO_ATUAL, "robo_execucao.log")
+
 class Tls12Adapter(HTTPAdapter):
     def init_poolmanager(self, connections, maxsize, block=False):
-        self.poolmanager = PoolManager(
-            num_pools=connections, maxsize=maxsize, block=block,
-            ssl_version=ssl.PROTOCOL_TLSv1_2
-        )
+        self.poolmanager = PoolManager(num_pools=connections, maxsize=maxsize, block=block, ssl_version=ssl.PROTOCOL_TLSv1_2)
 
 class SefazAutomacao:
     def __init__(self, certificado_path, certificado_senha):
@@ -42,12 +44,20 @@ class SefazAutomacao:
         self.certificado_senha = certificado_senha
         self.cnpj_empresa = "06288135002124"
         
+        # Configurações de log 
         self.logger = logging.getLogger("RoboFiscal")
+        self.logger.setLevel(logging.INFO)
         if not self.logger.handlers:
-            handler = logging.StreamHandler()
-            handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
-            self.logger.addHandler(handler)
-            self.logger.setLevel(logging.INFO)
+            
+            # Salva em arquivo para historico 
+            file_handler = logging.FileHandler(ARQUIVO_LOG)
+            file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+            self.logger.addHandler(file_handler)
+            
+            # Mostra na tela para monitoramento 
+            stream_handler = logging.StreamHandler()
+            stream_handler.setFormatter(logging.Formatter('%(asctime)s - %(message)s'))
+            self.logger.addHandler(stream_handler)
 
         self.session = self._criar_sessao()
         self.client_distribuicao = self._criar_cliente_zeep()
@@ -56,10 +66,7 @@ class SefazAutomacao:
         session = Session()
         session.verify = False
         session.mount("https://", Tls12Adapter())
-        adapter = Pkcs12Adapter(
-            pkcs12_filename=self.certificado_path,
-            pkcs12_password=self.certificado_senha
-        )
+        adapter = Pkcs12Adapter(pkcs12_filename=self.certificado_path, pkcs12_password=self.certificado_senha)
         session.mount("https://", adapter)
         return session
 
@@ -67,12 +74,7 @@ class SefazAutomacao:
         try:
             transport = Transport(session=self.session)
             settings = Settings(strict=False, xml_huge_tree=True)
-            client = Client(
-                wsdl=WSDL_DISTRIBUICAO,
-                transport=transport,
-                settings=settings
-            )
-            return client
+            return Client(wsdl=WSDL_DISTRIBUICAO, transport=transport, settings=settings)
         except Exception as e:
             self.logger.error(f"Erro zeep: {e}")
             raise
@@ -82,10 +84,8 @@ class SefazAutomacao:
         cnpj = "".join(filter(str.isdigit, self.cnpj_empresa))
         id_evento = f"ID210210{chave}0{sequencia:02d}"
         data_hora = datetime.now().strftime("%Y-%m-%dT%H:%M:%S-03:00")
-
-        NS_MAP = {None: NS_NFE}
         
-        inf_evento = etree.Element(f"{{{NS_NFE}}}infEvento", Id=id_evento, nsmap=NS_MAP)
+        inf_evento = etree.Element(f"{{{NS_NFE}}}infEvento", Id=id_evento, nsmap={None: NS_NFE})
         etree.SubElement(inf_evento, f"{{{NS_NFE}}}cOrgao").text = "91"
         etree.SubElement(inf_evento, f"{{{NS_NFE}}}tpAmb").text = "1"
         etree.SubElement(inf_evento, f"{{{NS_NFE}}}CNPJ").text = cnpj
@@ -94,7 +94,7 @@ class SefazAutomacao:
         etree.SubElement(inf_evento, f"{{{NS_NFE}}}tpEvento").text = "210210"
         etree.SubElement(inf_evento, f"{{{NS_NFE}}}nSeqEvento").text = str(sequencia)
         etree.SubElement(inf_evento, f"{{{NS_NFE}}}verEvento").text = "1.00"
-
+        
         det = etree.SubElement(inf_evento, f"{{{NS_NFE}}}detEvento", versao="1.00")
         etree.SubElement(det, f"{{{NS_NFE}}}descEvento").text = "Ciencia da Operacao"
 
@@ -102,74 +102,30 @@ class SefazAutomacao:
             pfx_bytes = f.read()
         private_key, cert, _ = pkcs12.load_key_and_certificates(pfx_bytes, self.certificado_senha.encode())
 
-        signer = XMLSigner(
-            method=methods.enveloped,
-            signature_algorithm="rsa-sha1",
-            digest_algorithm="sha1",
-            c14n_algorithm="http://www.w3.org/TR/2001/REC-xml-c14n-20010315"
-        )
-
-        signed_node = signer.sign(
-            inf_evento,
-            key=private_key,
-            cert=cert.public_bytes(serialization.Encoding.PEM),
-            reference_uri="#" + id_evento
-        )
+        signer = XMLSigner(method=methods.enveloped, signature_algorithm="rsa-sha1", digest_algorithm="sha1", c14n_algorithm="http://www.w3.org/TR/2001/REC-xml-c14n-20010315")
+        signed_node = signer.sign(inf_evento, key=private_key, cert=cert.public_bytes(serialization.Encoding.PEM), reference_uri="#" + id_evento)
         
         xml_assinado = etree.tostring(signed_node, encoding="unicode")
-        
-        # limpeza do XML 
         xml_limpo = re.sub(r'\sxmlns:ns\d+="[^"]+"', '', xml_assinado)
-        xml_limpo = re.sub(r'<(/?)\w+:', r'<\1', xml_limpo)
-        xml_limpo = xml_limpo.replace('<Signature>', f'<Signature xmlns="{NS_SIG}">')
-
-        envelope = f"""<envEvento xmlns="{NS_NFE}" versao="1.00"><idLote>1</idLote><evento xmlns="{NS_NFE}" versao="1.00">{xml_limpo}</evento></envEvento>"""
-        
-        return re.sub(r'>\s+<', '><', envelope)
+        xml_limpo = re.sub(r'<(/?)\w+:', r'<\1', xml_limpo).replace('<Signature>', f'<Signature xmlns="{NS_SIG}">')
+        return f"""<envEvento xmlns="{NS_NFE}" versao="1.00"><idLote>1</idLote><evento xmlns="{NS_NFE}" versao="1.00">{xml_limpo}</evento></envEvento>""".replace('>\n<', '><')
 
     def manifestar_ciencia(self, chave_nfe):
-        self.logger.info(f"Manifestando: {chave_nfe}")
-        
         try:
             xml_envio = self._gerar_xml_manifesto_assinado(chave_nfe)
-            
             soap = f'<?xml version="1.0" encoding="utf-8"?><soap12:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:soap12="http://www.w3.org/2003/05/soap-envelope"><soap12:Body><nfeDadosMsg xmlns="http://www.portalfiscal.inf.br/nfe/wsdl/NFeRecepcaoEvento4">{xml_envio}</nfeDadosMsg></soap12:Body></soap12:Envelope>'
+            headers = {"Content-Type": "application/soap+xml; charset=utf-8; action=\"http://www.portalfiscal.inf.br/nfe/wsdl/NFeRecepcaoEvento4/nfeRecepcaoEvento\"", "User-Agent": "Mozilla/5.0"}
             
-            headers = {
-                "Content-Type": "application/soap+xml; charset=utf-8; action=\"http://www.portalfiscal.inf.br/nfe/wsdl/NFeRecepcaoEvento4/nfeRecepcaoEvento\"",
-                "User-Agent": "Mozilla/5.0"
-            }
-
             response = self.session.post(URL_EVENTO, data=soap.encode("utf-8"), headers=headers, timeout=30)
-            
-            if response.status_code == 200:
-                if '<cStat>128</cStat>' in response.text:
-                    if '<cStat>135</cStat>' in response.text:
-                        self.logger.info(f"SUCESSO Ciencia: {chave_nfe}")
-                        return True
-                    elif '<cStat>573</cStat>' in response.text:
-                        self.logger.warning(f"Ja manifestada: {chave_nfe}")
-                        return True
-                    else:
-                        match = re.search(r'<xMotivo>(.*?)</xMotivo>', response.text)
-                        motivo = match.group(1) if match else "Erro desconhecido"
-                        self.logger.error(f"FALHA EVENTO: {motivo}")
-                        return False
-                else:
-                    self.logger.error("Erro Lote cStat!=128")
-                    return False
-            else:
-                self.logger.error(f"Erro HTTP {response.status_code}")
-                return False
-
+            if response.status_code == 200 and '<cStat>128</cStat>' in response.text:
+                return True
+            return False
         except Exception as e:
             self.logger.error(f"Erro ao manifestar: {e}")
             return False
 
-        #Consultor de novas notas 
     def consultar_novas_notas(self, ult_nsu="0"):
-        self.logger.info(f"Consultando NSU: {ult_nsu}")
-        
+        self.logger.info(f"--- Ciclo iniciado. NSU Atual: {ult_nsu} ---")
         try:
             dist_xml = etree.Element("distDFeInt", versao="1.01", xmlns=NS_NFE)
             etree.SubElement(dist_xml, "tpAmb").text = "1"
@@ -178,105 +134,90 @@ class SefazAutomacao:
             etree.SubElement(distNSU, "ultNSU").text = str(ult_nsu).zfill(15)
 
             resposta = self.client_distribuicao.service.nfeDistDFeInteresse(nfeDadosMsg=dist_xml)
-            
             resp_xml = etree.fromstring(etree.tostring(resposta, encoding="unicode"))
             
             cStat = resp_xml.find(f".//{{{NS_NFE}}}cStat").text
-            xMotivo = resp_xml.find(f".//{{{NS_NFE}}}xMotivo").text
             ultNSU_ret = resp_xml.find(f".//{{{NS_NFE}}}ultNSU").text
             maxNSU_ret = resp_xml.find(f".//{{{NS_NFE}}}maxNSU").text
             
-            self.logger.info(f"Status: {cStat} - {xMotivo} | MaxNSU: {maxNSU_ret}")
+            self.logger.info(f"SEFAZ Respondeu: Status {cStat} | MaxNSU na SEFAZ: {maxNSU_ret}")
 
             if cStat in ["138", "137"]:
                 lote = resp_xml.find(f".//{{{NS_NFE}}}loteDistDFeInt")
                 if lote is not None:
                     docs = lote.findall(f".//{{{NS_NFE}}}docZip")
                     self._processar_documentos(docs)
-                
                 return ultNSU_ret
-            else:
-                self.logger.error(f"Erro consulta: {xMotivo}")
-                return ult_nsu
-
+            return ult_nsu
         except Exception as e:
-            self.logger.error(f"Erro consulta: {e}")
+            self.logger.error(f"Erro fatal na consulta: {e}")
             return ult_nsu
 
-        # Processamento de documentos baixados
     def _processar_documentos(self, docs):
-        pasta_raiz = "Notas_Baixadas"
-        
+        pasta_base = os.path.join(DIRETORIO_ATUAL, "Notas_Baixadas")
+        if not os.path.exists(pasta_base): os.makedirs(pasta_base)
+
         for doc in docs:
             try:
-                ns_doc = doc.get("NSU")
                 schema = doc.get("schema")
-                conteudo_base64 = doc.text
-
-                # Decodificação do XML
-                xml_bytes = gzip.decompress(base64.b64decode(conteudo_base64))
-                xml_str = xml_bytes.decode('utf-8')
-                root = etree.fromstring(xml_bytes)
-
-                #Tentar pegar a Chave de Acesso
-                chave = "Desconhecida"
-                tag_chave = root.xpath("//*[local-name()='chNFe']")
-                if tag_chave:
-                    chave = tag_chave[0].text
-                tag_cnpj = root.xpath("//*[local-name()='dest']/*[local-name()='CNPJ']")
-                cnpj_pasta = tag_cnpj[0].text if tag_cnpj else "Sem_CNPJ"
-                tag_data = root.xpath("//*[local-name()='ide']/*[local-name()='dhEmi']")
-                if tag_data:
-                    data_str = tag_data[0].text  
-                    ano = data_str[:4]
-                    mes = data_str[5:7]
-                else:
-                    from datetime import datetime
-                    agora = datetime.now()
-                    ano = agora.strftime('%Y')
-                    mes = agora.strftime('%m')
-                    
-                caminho_final = os.path.join(pasta_raiz, cnpj_pasta, ano, mes)
-                os.makedirs(caminho_final, exist_ok=True)
-
-                # Salvar o arquivo XML
-                nome_arquivo = os.path.join(caminho_final, f"{chave}.xml")
-                with open(nome_arquivo, "w", encoding="utf-8") as f:
-                    f.write(xml_str)
-                
-                self.logger.info(f"XML BAIXADO: {chave} em {caminho_final}")
+                conteudo = gzip.decompress(base64.b64decode(doc.text)).decode('utf-8')
+                root = etree.fromstring(conteudo.encode('utf-8'))
                 
                 if "resNFe" in schema:
+                    chave = root.find(f".//{{{NS_NFE}}}chNFe").text
                     self.manifestar_ciencia(chave)
-
+                
+                elif "procNFe" in schema:
+                    # Pega o CNPJ
+                    tag_cnpj = root.find(f".//{{{NS_NFE}}}dest//{{{NS_NFE}}}CNPJ")
+                    cnpj_pasta = tag_cnpj.text if tag_cnpj is not None else "Sem_CNPJ"
+                    
+                    # Pega a Data, Ano e Mês
+                    data_emissao = root.find(f".//{{{NS_NFE}}}dhEmi")
+                    if data_emissao is not None and data_emissao.text:
+                        ano = data_emissao.text[:4]
+                        mes = data_emissao.text[5:7]
+                    else:
+                        agora = datetime.now()
+                        ano = agora.strftime('%Y')
+                        mes = agora.strftime('%m')
+                    
+                    # Monta o formato de pasta Cnpj/Ano/Mês 
+                    caminho_final = os.path.join(pasta_base, cnpj_pasta, ano, mes)
+                    if not os.path.exists(caminho_final): 
+                        os.makedirs(caminho_final)
+                    
+                    # Salva 
+                    chave = root.find(f".//{{{NS_NFE}}}infProt//{{{NS_NFE}}}chNFe").text
+                    with open(os.path.join(caminho_final, f"{chave}.xml"), "w", encoding="utf-8") as f:
+                        f.write(conteudo)
+                    self.logger.info(f"ARQUIVO SALVO: {chave} na pasta {cnpj_pasta}/{ano}/{mes}")
             except Exception as e:
-                self.logger.error(f"Erro doc NSU {ns_doc}: {e}")
+                self.logger.error(f"Erro ao processar item: {e}")
 
-    #Retorno de notas
 if __name__ == "__main__":
-    CERTIFICADO = r"C:\Users\bruno.sousa\Documents\.env\Certificado.pfx"
-    SENHA = "Abcd1234"
-    ARQUIVO_NSU = "ultimo_nsu.txt"
+    if not os.path.exists(CAMINHO_CERTIFICADO):
+        print(f"ERRO FATAL: Certificado não encontrado em: {CAMINHO_CERTIFICADO}")
+        exit()
+
+    robo = SefazAutomacao(CAMINHO_CERTIFICADO, SENHA_CERTIFICADO)
     
-    robo = SefazAutomacao(CERTIFICADO, SENHA)
-    
+    # Carrega ou Cria NSU
     if os.path.exists(ARQUIVO_NSU):
-        with open(ARQUIVO_NSU, "r") as f:
-            ultimo_nsu = f.read().strip()
-        print(f"Retomando NSU: {ultimo_nsu}")
+        with open(ARQUIVO_NSU, "r") as f: ultimo_nsu = f.read().strip()
     else:
-        ultimo_nsu = "0"
-        print("Comecando NSU 0")
+        # Esse NSU foi utilizado para teste 
+        ultimo_nsu = "35034"
     
+    # loop infinito para ficar consultando a sefaz
     while True:
         novo_nsu = robo.consultar_novas_notas(ultimo_nsu)
         
         if novo_nsu != ultimo_nsu:
             ultimo_nsu = novo_nsu
-            with open(ARQUIVO_NSU, "w") as f:
-                f.write(ultimo_nsu)
-            print(f"NSU {ultimo_nsu} salvo.")
-            time.sleep(2)
+            with open(ARQUIVO_NSU, "w") as f: f.write(ultimo_nsu)
+            time.sleep(2) # Pausa curta se tiver muita nota 
         else:
-            print("Sem novas notas. Aguardando...")
-            break
+            # Se não tem nota nova ele pausa por 1 hora 
+            robo.logger.info("Tudo atualizado. Dormindo por 1 hora...")
+            time.sleep(3600)
