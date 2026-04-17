@@ -29,7 +29,7 @@ NS_SIG = "http://www.w3.org/2000/09/xmldsig#"
 
 # Configurações de caminho 
 DIRETORIO_ATUAL = os.path.dirname(os.path.abspath(__file__))
-CAMINHO_CERTIFICADO = r"C:\Users\bruno.sousa\Documents\.env\Certificado.pfx"
+CAMINHO_CERTIFICADO = os.path.join(DIRETORIO_ATUAL, "Certificado.pfx")
 SENHA_CERTIFICADO = "Abcd1234" 
 ARQUIVO_NSU = os.path.join(DIRETORIO_ATUAL, "ultimo_nsu.txt")
 ARQUIVO_LOG = os.path.join(DIRETORIO_ATUAL, "robo_execucao.log")
@@ -219,5 +219,5 @@ if __name__ == "__main__":
             time.sleep(2) # Pausa curta se tiver muita nota 
         else:
             # Se não tem nota nova ele pausa por 1 hora 
-            robo.logger.info("Tudo atualizado. Dormindo por 1 hora...")
-            time.sleep(3600)
+            robo.logger.info("Tudo atualizado, não tem mais notas.")
+            break
